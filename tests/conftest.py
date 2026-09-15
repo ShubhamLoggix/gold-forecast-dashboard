@@ -12,6 +12,20 @@ if str(REPO_ROOT) not in sys.path:
 from config import settings  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_background_bootstrap(monkeypatch):
+    """Never let tests spawn the REAL startup bootstrap thread.
+
+    The background thread ingests from yfinance/Groww and loads the real
+    model, mutating global state (deps._service) while later tests run —
+    a source of order-dependent flakiness. Tests that exercise bootstrap
+    behavior patch what they need explicitly.
+    """
+    import api.deps as deps  # noqa: E402
+
+    monkeypatch.setattr(deps, "bootstrap_if_needed", lambda: None)
+
+
 def make_history(
     n: int = 300,
     start: str = "2024-01-01",
