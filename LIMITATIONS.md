@@ -44,6 +44,21 @@ fine-tuning lands near 50% directional accuracy.
 - A demonstration of the engineering pipeline (ingestion → validation →
   forecasting → backtesting → dashboard), **not** a trading signal.
 
+## Model-drift watchdog
+
+The project includes an automatic honesty check: after every backtest run
+(daily/weekly scheduled runs and `scripts/run_backtest.py`), TimesFM's
+directional accuracy is compared against the naive carry-forward baseline. If
+TimesFM falls **more than 5 percentage points below** the naive baseline, the
+run logs a `WARNING`, `/api/v1/health` reports
+`model_underperforming_baseline: true` (status becomes `degraded`), and the
+dashboard's model-info panel shows a prominent warning. Given that TimesFM's
+directional accuracy hovers near 50% (chance), this flag will appear and
+disappear between backtest windows — that is expected behavior and is precisely
+the transparency the dashboard is designed to provide. It is not a bug fix
+signal; it is a reminder that the model has no demonstrated edge over "do
+nothing".
+
 ## Not investment advice
 
 Nothing here is investment advice. Do not make financial decisions based on

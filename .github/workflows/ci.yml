@@ -22,6 +22,50 @@ jobs:
       - name: Run tests (fixtures + stubs only; no network, no GPU, no model download)
         run: pytest tests -q --tb=short
 
+  backtest-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # Minimal deps only: the smoke run uses a stubbed model, so torch/timesfm
+      # are not needed; keeps this job fast while still exercising the full
+      # walk-forward pipeline on a fixture window.
+      - name: Install minimal deps
+        run: pip install numpy pandas pyarrow
+      - name: Run walk-forward backtest on fixture window
+        run: python scripts/backtest_smoke.py
+
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend image (CPU-only torch, GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.backend
+          push: false
+          tags: gold-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build frontend image (GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.frontend
+          push: false
+          tags: gold-frontend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   frontend-build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -32,7 +76,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Build frontend
+      - name: Build frontend (tsc + vite)
         working-directory: frontend
         run: |
           npm ci --no-audit --no-fund

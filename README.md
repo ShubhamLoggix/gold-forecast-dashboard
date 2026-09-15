@@ -8,6 +8,9 @@ Production-ready dashboard that ingests real gold price data (COMEX `GC=F` via `
 future prices with Google Research's **TimesFM** foundation model, compares against naive baselines,
 and validates everything with a walk-forward backtest — all displayed in an interactive dashboard.
 
+> Project path on this machine: `D:\projects\gold-forecast-dashboard` (migrated from C: for disk
+> space; model + pip caches also live on D:).
+
 ## Architecture
 
 ```
@@ -41,14 +44,21 @@ and validates everything with a walk-forward backtest — all displayed in an in
 ## Quickstart (Stage A)
 
 ```bash
+cd D:\projects\gold-forecast-dashboard
 python -m venv .venv
 .venv\Scripts\activate            # Windows (Linux: source .venv/bin/activate)
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-First run downloads ~5 years of `GC=F` history and the `google/timesfm-2.5-200m-pytorch`
+First run downloads ~10 years of `GC=F` history and the `google/timesfm-2.5-200m-pytorch`
 weights (~1 GB), then runs on CPU or GPU. Inference takes ~0.3 s per forecast on CPU.
+
+Cache locations: `HF_HOME`, `TRANSFORMERS_CACHE`, and `PIP_CACHE_DIR` should be set as
+persistent User environment variables pointing at a drive with headroom
+(e.g. `D:\hf_cache`, `D:\pip_cache` — see `.env.example`). On low-disk system drives this
+project's `config.py` also auto-falls-back to `D:\hf_cache` when unset, but the env vars are
+the supported way.
 
 ## Quickstart (Stage B)
 
@@ -63,31 +73,48 @@ Frontend (dev):
 ```bash
 cd frontend
 npm install
-npm run dev        # http://localhost:5173, /api proxied to :8000
+npm run dev        # Vite dev server; /api proxied to :8000
 ```
 
-Full stack with Docker:
+Full stack with Docker (verified end-to-end — see [DEPLOYMENT_VERIFICATION.md](DEPLOYMENT_VERIFICATION.md)):
 
 ```bash
 cd docker
 docker compose up --build
 # API:      http://localhost:8000/docs
-# Frontend: http://localhost:5173
+# Frontend: http://localhost:5174  (override with FRONTEND_PORT; 5173 is often taken)
 ```
+
+Notes:
+- The backend image installs **CPU-only torch** (`download.pytorch.org/whl/cpu`) — the default
+  Linux wheel pulls the full CUDA stack (~3.5 GB) that CPU inference never uses.
+- On first start with an empty volume the backend seeds data from yfinance and downloads the
+  TimesFM weights in the background; the HTTP server stays responsive and `/api/v1/health`
+  reports progress until `model_loaded: true`.
+- The nginx frontend container includes Docker's embedded-DNS resolver so proxied `/api`
+  calls work as soon as the backend is healthy (fixed a 502 regression; details in
+  DEPLOYMENT_VERIFICATION.md).
 
 The compose file mounts a `gold-data` volume for `data/` (canonical series + backtest reports
 + HF model cache).
 
 ## Operations
 
-- `GET /api/v1/health` — model loaded, data freshness (`fresh|cached|stale|missing`), scheduler flag.
-- `POST /api/v1/refresh` — protected by `X-API-Key` (from `.env`), rate-limited to 1/min, force
-  refresh via `?force=true`.
+- `GET /api/v1/health` — model loaded, data freshness (`fresh|cached|stale|missing`), scheduler flag,
+  and the **model-drift watchdog** (`model_underperforming_baseline`) comparing the latest backtest's
+  TimesFM directional accuracy against the naive baseline (warning threshold: -5 pp).
+- `POST /api/v1/refresh` — protected by `X-API-Key` (constant-time compared), rate-limited to 1/min,
+  force refresh via `?force=true`. Public read endpoints are rate-limited (60/min per client) and
+  capped at 1 MiB body size.
 - Scheduler (if `ENABLE_SCHEDULER=1`): daily data refresh at 22:10 UTC Mon–Fri (after COMEX close),
   weekly backtest Monday 06:00 UTC. Failures are logged and flip `data_may_be_stale` in `/health`
   instead of crashing the API; the API keeps serving last-known-good cached data.
 - Backtest report: `scripts/run_backtest.py --horizon 30 --step 7 [--max-folds 52]` → writes
-  `data/backtests/backtest_<date>.json`, served by `GET /api/v1/backtest/latest`.
+  `data/backtests/backtest_<date>.json` (including the drift block), served by
+  `GET /api/v1/backtest/latest`.
+- CI: `.github/workflows/ci.yml` runs unit tests, a fixture-window backtest smoke
+  (`scripts/backtest_smoke.py`, no model download), and builds both Docker images with
+  GitHub Actions layer caching on every PR.
 
 ## Model & license
 
