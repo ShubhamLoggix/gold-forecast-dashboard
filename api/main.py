@@ -31,6 +31,7 @@ from api.schemas import (
     HistoryResponse,
     IndiaCitiesResponse,
     IndiaCity,
+    IndiaForecastResponse,
     IndiaRatePoint,
     IndiaRatesResponse,
     OhlcPoint,
@@ -402,6 +403,74 @@ def get_india_rates(
     cached = deps.cache_get(key)
     if cached is None:
         cached = _india_rates_response(city, unit)
+        deps.cache_set(key, cached)
+    return cached
+
+
+def _india_forecast_response(city: str, horizon: str, karat: str, unit: str) -> IndiaForecastResponse:
+    """Estimated RETAIL forecast: TimesFM bullion forecast (INR, karat, unit)
+    scaled by the city's current retail premium ratio."""
+    from ingestion.india_rates import get_city_rates
+
+    bullion = _forecast_response(horizon, True, currency="inr", karat=karat, unit=unit)
+    try:
+        data = get_city_rates(city)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown city: {city!r}") from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"India retail rates source unavailable: {exc}"
+        ) from exc
+
+    retail_value = float(data["per_gram"][karat]) * UNIT_FACTORS[unit]
+    bullion_value = float(bullion.history_last_close)
+    if bullion_value <= 0:
+        raise HTTPException(status_code=502, detail="Bullion series unavailable for premium scaling")
+    ratio = retail_value / bullion_value
+
+    def _scale(values: list[float]) -> list[float]:
+        return [v * ratio for v in values]
+
+    return IndiaForecastResponse(
+        horizon=bullion.horizon,
+        horizon_days=bullion.horizon_days,
+        model_version=bullion.model_version,
+        generated_at=bullion.generated_at,
+        latency_ms=bullion.latency_ms,
+        history_last_date=bullion.history_last_date,
+        history_last_close=retail_value,
+        dates=bullion.dates,
+        point=_scale(bullion.point),
+        q10=_scale(bullion.q10),
+        q50=_scale(bullion.q50),
+        q90=_scale(bullion.q90),
+        quantiles=True,
+        baselines=[
+            BaselineSeries(name=b.name, values=_scale(b.values))
+            for b in bullion.baselines
+        ],
+        currency="inr",
+        karat=karat,  # type: ignore[arg-type]
+        unit=unit,  # type: ignore[arg-type]
+        rate=bullion.rate,
+        premium_ratio=ratio,
+        bullion_history_last_close=bullion_value,
+    )
+
+
+@app.get("/api/v1/india/forecast", response_model=IndiaForecastResponse, tags=["india"])
+def get_india_forecast(
+    city: str = Query(default="pune", pattern="^[a-z0-9-]{1,80}$"),
+    horizon: str = Query(default="1m", pattern="^(1w|1m|3m|6m|1y)$"),
+    karat: str = Query(default="24k", pattern="^(24k|22k|18k)$"),
+    unit: str = Query(default="10gram", pattern="^(gram|10gram)$"),
+    request: Request = None,  # type: ignore[assignment]
+):
+    _rate_limit_public(request, "india_forecast")
+    key = ("india_forecast", city, horizon, karat, unit, settings.model_version)
+    cached = deps.cache_get(key)
+    if cached is None:
+        cached = _india_forecast_response(city, horizon, karat, unit)
         deps.cache_set(key, cached)
     return cached
 

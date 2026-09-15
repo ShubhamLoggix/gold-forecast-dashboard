@@ -196,10 +196,27 @@ export interface IndiaRatesResponse {
   disclaimer: string;
 }
 
+export interface IndiaForecastResponse extends ForecastResponse {
+  premium_ratio: number;
+  bullion_history_last_close: number;
+  disclaimer: string;
+}
+
 export const fetchIndiaCities = () =>
   request<IndiaCitiesResponse>(`/api/v1/india/cities`);
 
 export const fetchIndiaRates = (city: string, unit: Unit) =>
   request<IndiaRatesResponse>(
     `/api/v1/india/rates?city=${encodeURIComponent(city)}&unit=${unit}`,
+  );
+
+export const fetchIndiaForecast = (
+  city: string,
+  horizon: Horizon,
+  karat: Karat,
+  unit: Unit,
+) =>
+  request<IndiaForecastResponse>(
+    `/api/v1/india/forecast?city=${encodeURIComponent(city)}` +
+      `&horizon=${horizon}&karat=${karat}&unit=${unit}`,
   );

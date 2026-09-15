@@ -80,6 +80,15 @@ class IndiaRatesResponse(BaseModel):
     disclaimer: str = INDIA_RETAIL_DISCLAIMER
 
 
+INDIA_FORECAST_DISCLAIMER = (
+    "ESTIMATED retail forecast: the TimesFM COMEX bullion forecast (which is the "
+    "only series with enough history to forecast) scaled by the city's current "
+    "retail premium (today's published retail quote / today's bullion-equivalent). "
+    "The premium varies daily and by city, so this is an approximation — not a "
+    "jeweller quote."
+)
+
+
 class HistoryResponse(BaseModel):
     start: dt.date
     end: dt.date
@@ -116,6 +125,12 @@ class ForecastResponse(BaseModel):
     karat: Karat | None = None
     unit: Unit | None = None
     rate: RateInfo | None = None
+
+
+class IndiaForecastResponse(ForecastResponse):
+    premium_ratio: float
+    bullion_history_last_close: float
+    disclaimer: str = INDIA_FORECAST_DISCLAIMER
 
 
 class BacktestFoldOut(BaseModel):

@@ -14,6 +14,7 @@ import api.main as main_mod
 from api.main import app
 from config import settings
 from tests.conftest import make_history
+from tests.test_api import StubModel
 
 
 def _gold_rate_data():
@@ -144,3 +145,50 @@ def test_india_api_endpoints(stub_groww, monkeypatch, tmp_path):
 
         bad = client.get("/api/v1/india/rates", params={"city": "PUNE!"})
         assert bad.status_code == 422
+
+
+def test_india_forecast_endpoint(stub_groww, monkeypatch, tmp_path):
+    frame = make_history(n=300)
+    processed = tmp_path / "processed"
+    processed.mkdir(parents=True)
+    frame.to_parquet(processed / "gold_prices_daily.parquet", index=False)
+    fx = pd.DataFrame(
+        {
+            "date": pd.bdate_range("2024-01-01", periods=300),
+            "open": 83.0,
+            "high": 83.5,
+            "low": 82.5,
+            "close": 83.2,
+            "volume": 0.0,
+            "source": "fixture",
+        }
+    )
+    fx.to_parquet(processed / "usdinr_daily.parquet", index=False)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+
+    service = main_mod.GoldForecastService(model_version="2.5")
+    service._model = StubModel()
+    service._predict_fn = service._predict_2p5
+    monkeypatch.setattr(deps, "get_history", lambda: frame)
+    monkeypatch.setattr(deps, "get_service", lambda: service)
+    monkeypatch.setattr(settings, "api_key", "test-key")
+    deps.invalidate_response_cache()
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/v1/india/forecast",
+            params={"city": "pune", "horizon": "1m", "karat": "24k", "unit": "10gram"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["point"]) == 21
+        assert body["premium_ratio"] > 1.0
+        assert body["bullion_history_last_close"] > 0
+        # retail last close is today's per-10g quote
+        assert body["history_last_close"] == 153170
+        # all forecast values scaled up by the premium
+        assert min(body["point"]) > 100000
+        assert min(body["q10"]) <= min(body["q50"]) <= min(body["q90"])
+        assert "ESTIMATED" in body["disclaimer"]
+
+        missing = client.get("/api/v1/india/forecast", params={"city": "atlantis"})
+        assert missing.status_code == 404

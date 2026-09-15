@@ -18,6 +18,7 @@ import {
   fetchHealth,
   fetchHistory,
   fetchIndiaCities,
+  fetchIndiaForecast,
   fetchIndiaRates,
   type BacktestResponse,
   type Currency,
@@ -27,6 +28,7 @@ import {
   type HistoryResponse,
   type Horizon,
   type IndiaCity,
+  type IndiaForecastResponse,
   type IndiaRatesResponse,
   type Karat,
   type Unit,
@@ -180,6 +182,7 @@ export default function App() {
   const [city, setCity] = useState("pune");
   const [cities, setCities] = useState<IndiaCity[] | null>(null);
   const [india, setIndia] = useState<IndiaRatesResponse | null>(null);
+  const [indiaForecast, setIndiaForecast] = useState<IndiaForecastResponse | null>(null);
   const [indiaError, setIndiaError] = useState<ApiError | null>(null);
   const [indiaLoading, setIndiaLoading] = useState(false);
 
@@ -244,13 +247,19 @@ export default function App() {
     setIndiaLoading(true);
     setIndiaError(null);
     try {
-      setIndia(await fetchIndiaRates(city, unit));
+      const [rates, fc] = await Promise.all([
+        fetchIndiaRates(city, unit),
+        fetchIndiaForecast(city, horizon, karat, unit).catch(() => null),
+      ]);
+      setIndia(rates);
+      setIndiaForecast(fc);
     } catch (e) {
       setIndiaError(e as ApiError);
+      setIndiaForecast(null);
     } finally {
       setIndiaLoading(false);
     }
-  }, [city, unit]);
+  }, [city, unit, horizon, karat]);
 
   useEffect(() => {
     if (isRetail) void loadRetail();
@@ -329,8 +338,22 @@ export default function App() {
     const pgKey =
       karat === "24k" ? "price_24k_pg" : karat === "22k" ? "price_22k_pg" : "price_18k_pg";
     const factor = unit === "10gram" ? 10 : 1;
-    return india.history.map((p) => ({ date: p.date, retail: p[pgKey] * factor }));
-  }, [india, karat, unit]);
+    const histLike = {
+      points: india.history.map((p) => ({ date: p.date, close: p[pgKey] * factor })),
+    } as unknown as HistoryResponse;
+    if (!indiaForecast) {
+      return histLike.points.map((p) => ({
+        date: p.date,
+        hist: p.close,
+        point: null,
+        bandBase: null,
+        bandWidth: null,
+        naive: null,
+        sma: null,
+      }));
+    }
+    return buildRows(histLike, indiaForecast as unknown as ForecastResponse);
+  }, [india, indiaForecast, karat, unit]);
 
   return (
     <div className="container">
@@ -453,6 +476,7 @@ export default function App() {
             ))}
           </div>
         </div>
+        </>)}
         <div className="control-group">
           <label>Forecast horizon</label>
           <div className="seg">
@@ -467,6 +491,8 @@ export default function App() {
             ))}
           </div>
         </div>
+        {!isRetail && (
+        <>
         <div className="control-group">
           <label>Custom dates</label>
           <div className="date-inputs">
@@ -531,6 +557,25 @@ export default function App() {
                   />
                 );
               })}
+              {indiaForecast && (
+                <Metric
+                  label={`Forecast ${horizon} (est. retail, ${karat.toUpperCase()})`}
+                  value={formatValue(indiaForecast.q50[indiaForecast.q50.length - 1])}
+                  delta={
+                    (() => {
+                      const end = indiaForecast.q50[indiaForecast.q50.length - 1];
+                      const pct = (end / indiaForecast.history_last_close - 1) * 100;
+                      return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% est.`;
+                    })()
+                  }
+                  deltaColor={
+                    indiaForecast.q50[indiaForecast.q50.length - 1] >=
+                    indiaForecast.history_last_close
+                      ? "up"
+                      : "down"
+                  }
+                />
+              )}
             </div>
           )}
           {!isRetail && (
@@ -584,12 +629,62 @@ export default function App() {
                         }
                       />
                       <Legend />
+                      <Area
+                        dataKey="bandBase"
+                        stackId="band"
+                        stroke="none"
+                        fill="none"
+                        connectNulls
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        dataKey="bandWidth"
+                        stackId="band"
+                        stroke="none"
+                        fill="rgba(217,164,6,0.22)"
+                        name="Est. retail band p10–p90"
+                        connectNulls
+                        isAnimationActive={false}
+                      />
                       <Line
-                        dataKey="retail"
+                        dataKey="hist"
                         stroke="#1266a2"
                         strokeWidth={2.2}
                         dot={false}
                         name={`Retail close (${karat.toUpperCase()})`}
+                        connectNulls={false}
+                      />
+                      <Line
+                        dataKey="point"
+                        stroke="#d9a406"
+                        strokeWidth={2.4}
+                        dot={false}
+                        name="Est. retail forecast (p50)"
+                        connectNulls={false}
+                      />
+                      <Line
+                        dataKey="naive"
+                        stroke="#888"
+                        strokeWidth={1.2}
+                        strokeDasharray="6 4"
+                        dot={false}
+                        name="Naive (scaled)"
+                        connectNulls={false}
+                      />
+                      <Line
+                        dataKey="sma"
+                        stroke="#bb5588"
+                        strokeWidth={1.2}
+                        strokeDasharray="2 3"
+                        dot={false}
+                        name="SMA(20) (scaled)"
+                        connectNulls={false}
+                      />
+                      <ReferenceLine
+                        x={indiaForecast?.history_last_date}
+                        stroke="#d9a406"
+                        strokeDasharray="4 4"
+                        label="today"
                       />
                     </ComposedChart>
                   </ResponsiveContainer>
@@ -598,10 +693,18 @@ export default function App() {
                   </div>
                   <div className="chart-caption" style={{ marginTop: 6 }}>
                     Source: Groww gold rates — published retail quotes for {india.city} as of{" "}
-                    {india.date} (last {india.history.length} available days). Retail rates
+                    {india.date} (last {india.history.length} available days; Groww only
+                    publishes ~10 days — history accumulates here daily). Retail rates
                     include import duty, GST, and local dealer premium — they intentionally
                     differ from bullion prices.
                   </div>
+                  {indiaForecast && (
+                    <div className="chart-caption" style={{ marginTop: 6 }}>
+                      Forecast = TimesFM COMEX bullion forecast ×{" "}
+                      {indiaForecast.premium_ratio.toFixed(3)} (current retail premium vs
+                      bullion-equivalent). {indiaForecast.disclaimer}
+                    </div>
+                  )}
                   <div className="chart-caption" style={{ marginTop: 6 }}>
                     {india.disclaimer}
                   </div>

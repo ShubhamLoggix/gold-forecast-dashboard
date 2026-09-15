@@ -66,7 +66,9 @@ published city-wise retail rates (24K/22K/18K) scraped from Groww's gold-rates p
 of that source: it is a third-party website (format/layout changes can break ingestion), it
 provides only ~10 days of look-back per city (longer history accumulates locally day by day),
 rates are updated by Groww on their own schedule (not real-time tick data), and TimesFM
-forecasts are still computed on the COMEX bullion series — not on retail rates.
+forecasts are still computed on the COMEX bullion series — the retail-tab forecast is an
+**estimate** (bullion forecast × the city's current retail premium ratio), since only the
+COMEX series has enough history to forecast directly.
 
 ## Model-drift watchdog
 

@@ -33,7 +33,11 @@ scraped from [Groww's gold-rates pages](https://groww.in/gold-rates). Covers ~35
 cities with a city selector, prev-day % change, and the last ~10 days of history per city
 (more accumulates daily in `data/processed/india_gold_rates.parquet`).
 
-- API: `GET /api/v1/india/cities` and `GET /api/v1/india/rates?city=pune&unit=10gram`
+- API: `GET /api/v1/india/cities`, `GET /api/v1/india/rates?city=pune&unit=10gram`, and
+  `GET /api/v1/india/forecast?city=pune&horizon=1m&karat=24k&unit=10gram` — the forecast is
+  an **estimate**: TimesFM's COMEX bullion forecast scaled by the city's current retail
+  premium (today's retail quote ÷ today's bullion-equivalent), since only the COMEX series
+  has enough history to forecast.
 - Refreshed by the daily scheduler alongside the FX top-up; failures never degrade /health
 - Retail rates include duty/GST/premium and vary by city — they intentionally differ from
   bullion prices; each response carries an attribution + disclaimer block.
