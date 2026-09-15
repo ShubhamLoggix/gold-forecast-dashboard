@@ -8,6 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt ./
+# CPU-only torch first: the plain PyPI torch on Linux pulls the full CUDA stack
+# (~3.5 GB of nvidia-* wheels) which CPU inference does not need. The pinned
+# torch==2.10.0 in requirements.txt is then already satisfied and skipped.
+RUN pip install --no-cache-dir torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config.py logging_setup.py ./
