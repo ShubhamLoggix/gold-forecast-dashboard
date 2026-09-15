@@ -95,6 +95,9 @@ class Settings:
     dashboard_url: str = field(
         default_factory=lambda: os.environ.get("DASHBOARD_URL", "").strip()
     )
+    digest_city: str = field(
+        default_factory=lambda: os.environ.get("DIGEST_CITY", "pune").strip()
+    )
 
     @property
     def alerts_enabled(self) -> bool:

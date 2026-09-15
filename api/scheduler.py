@@ -134,7 +134,8 @@ def _send_digest_and_check_alerts() -> None:
         return
     try:
         import api.deps as deps
-        from alerts.telegram import daily_digest, evaluate_targets
+        from alerts.telegram import daily_digest, evaluate_targets, list_targets
+        from conversion import convert_series
         from forecasting.timesfm_service import HORIZON_PRESETS
         from ingestion.fetch_gold_prices import load_canonical
         from ingestion.india_rates import get_city_rates
@@ -143,16 +144,43 @@ def _send_digest_and_check_alerts() -> None:
         history = load_canonical()
         rate = latest_rate()
         service = deps.get_service()
-        result = service.forecast(history, HORIZON_PRESETS["1m"], quantiles=False)
+        city = settings.digest_city
+
         try:
-            retail = get_city_rates("pune")
-            pune = {"k24": retail["per_10g"]["24k"], "k22": retail["per_10g"]["22k"]}
+            retail_data = get_city_rates(city)
         except Exception:  # noqa: BLE001 - retail line is optional
-            pune = None
+            retail_data = None
+
+        bullion = service.forecast(history, HORIZON_PRESETS["1m"], quantiles=False)
+        rate_val = rate["rate"]
+        bullion_22k_10g_today = float(
+            convert_series(float(history["close"].iloc[-1]), rate_val, "22k", "10gram")
+        )
+        est_22k_10g = float(
+            convert_series(float(bullion.point[-1]), rate_val, "22k", "10gram")
+        )
+        ratio = None
+        pct = None
+        if retail_data and bullion_22k_10g_today > 0:
+            ratio = retail_data["per_10g"]["22k"] / bullion_22k_10g_today
+            est_22k_10g *= ratio
+            pct = (est_22k_10g / retail_data["per_10g"]["22k"] - 1) * 100
+        forecast_info = {
+            "horizon": "1m",
+            "median_inr_22k_10g": est_22k_10g,
+            "pct": pct,
+            "premium_ratio": ratio,
+        }
+        active = len(
+            [t for t in list_targets() if not t.get("triggered_at")]
+        )
         daily_digest(
-            history, rate["rate"], rate["rate_date"],
-            forecast_1m_median_usd=float(result.point[-1]),
-            pune_retail=pune, drift=_latest_drift_report(),
+            retail=retail_data,
+            usd_inr_rate=rate["rate"],
+            usd_inr_rate_date=rate["rate_date"],
+            forecast_info=forecast_info,
+            drift=_latest_drift_report(),
+            active_targets=active,
         )
         evaluate_targets(history, rate["rate"])
     except Exception:  # noqa: BLE001

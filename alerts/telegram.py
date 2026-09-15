@@ -172,41 +172,88 @@ def _target_message(target: dict) -> str:
     )
 
 
-def daily_digest(
-    history: pd.DataFrame,
-    usd_inr_rate: float,
-    usd_inr_rate_date,
-    forecast_1m_median_usd: float | None,
-    pune_retail: dict | None = None,
-    drift: dict | None = None,
-) -> bool:
-    """Build + send the daily digest. Returns True if sent."""
-    close = float(history["close"].iloc[-1])
-    last_date = pd.Timestamp(history["date"].iloc[-1]).date().isoformat()
-    lines = [
-        "GOLD DAILY",
-        f"Date: {last_date}",
-        f"COMEX GC=F: ${close:,.2f}/oz",
-    ]
-    if usd_inr_rate:
-        from conversion import convert_series
+def _inr(value: float) -> str:
+    """Indian digit grouping: 1,53,170 (lakh/crore style)."""
+    s = f"{float(value):,.0f}".replace(",", "")
+    if len(s) <= 3:
+        return s
+    head, tail = s[:-3], s[-3:]
+    groups = [head[::-1][i:i + 2] for i in range(0, len(head), 2)]
+    return ",".join(g[::-1] for g in reversed(groups)) + "," + tail
 
-        v24k = float(convert_series(close, usd_inr_rate, "24k", "10gram"))
-        v22k = float(convert_series(close, usd_inr_rate, "22k", "10gram"))
-        lines.append(f"Bullion-equiv 24K/10g: Rs {v24k:,.0f}")
-        lines.append(f"Bullion-equiv 22K/10g: Rs {v22k:,.0f}")
-        lines.append(f"USD/INR: {usd_inr_rate:.4f} as of {usd_inr_rate_date}")
-    if pune_retail:
+
+def _fmt_pct(value) -> str:
+    if value is None:
+        return ""
+    return f"{value:+.2f}%"
+
+
+def daily_digest(
+    retail: dict | None,
+    usd_inr_rate: float | None,
+    usd_inr_rate_date,
+    forecast_info: dict | None,
+    drift: dict | None = None,
+    active_targets: int = 0,
+) -> bool:
+    """Build + send the daily digest. Returns True if sent.
+
+    Template is retail-first: Groww city rates in INR (24K/22K/18K, per 10g and
+    per gram), the estimated retail forecast, and bullion only as a reference.
+    """
+    city = (retail or {}).get("city") or "Pune"
+    lines = [f"GOLD DAILY — {city} retail (Groww)"]
+    if retail:
+        lines.append(f"Rate date: {retail.get('date')}")
+        lines.append("")
+        per_10g = retail.get("per_10g") or {}
+        pct = retail.get("pct_change") or {}
+        per_gram = retail.get("per_gram") or {}
         lines.append(
-            "Pune retail 24K/10g: Rs {:,.0f} | 22K/10g: Rs {:,.0f}".format(
-                pune_retail.get("k24", 0), pune_retail.get("k22", 0)
+            f"24K/10g: Rs {_inr(per_10g.get('24k', 0))}  ({_fmt_pct(pct.get('24k'))} vs prev day)"
+        )
+        lines.append(
+            f"22K/10g: Rs {_inr(per_10g.get('22k', 0))}  ({_fmt_pct(pct.get('22k'))} vs prev day)"
+        )
+        lines.append(
+            f"18K/10g: Rs {_inr(per_10g.get('18k', 0))}  ({_fmt_pct(pct.get('18k'))} vs prev day)"
+        )
+        lines.append("")
+        lines.append(
+            "Per gram: 24K Rs {} | 22K Rs {} | 18K Rs {}".format(
+                _inr(per_gram.get("24k", 0)), _inr(per_gram.get("22k", 0)), _inr(per_gram.get("18k", 0))
             )
         )
-    if forecast_1m_median_usd:
-        lines.append(f"Forecast 1m median: ${forecast_1m_median_usd:,.2f}/oz")
+    if usd_inr_rate:
+        lines.append(f"USD/INR: {usd_inr_rate:.4f} as of {usd_inr_rate_date}")
+    if forecast_info:
+        lines.append("")
+        lines.append(
+            "Forecast {} (est. retail, 22K/10g): Rs {} ({} est.)".format(
+                forecast_info.get("horizon", "1m"),
+                _inr(forecast_info.get("median_inr_22k_10g", 0)),
+                _fmt_pct(forecast_info.get("pct")),
+            )
+        )
+        lines.append(
+            "(estimate = TimesFM bullion forecast x current retail premium"
+            + f" {forecast_info.get('premium_ratio', 0):.3f}"
+            + ")"
+        )
+    if active_targets:
+        lines.append(f"Active price alerts: {active_targets}")
     if drift and drift.get("underperforming"):
-        lines.append("NOTE: model currently underperforming naive baseline - treat forecasts with extra skepticism")
+        lines.append("")
+        lines.append(
+            "NOTE: model currently underperforming naive baseline — "
+            "treat forecasts with extra skepticism"
+        )
+    lines.append("")
+    lines.append(
+        "Retail quotes include import duty + GST + local premium and move during "
+        "the day; confirm with your jeweller before buying."
+    )
     if settings.dashboard_url:
-        lines.append(f"\nDashboard: {settings.dashboard_url}")
-    lines.append("Not investment advice - forecasts are experimental.")
+        lines.append(f"Dashboard: {settings.dashboard_url}")
+    lines.append("Not investment advice — forecasts are experimental.")
     return send_message("\n".join(lines))

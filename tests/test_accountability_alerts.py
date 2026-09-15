@@ -108,11 +108,47 @@ def test_evaluate_targets_triggers_once(isolated_settings, monkeypatch):
     assert len(sent) == 1
 
 
+def test_daily_digest_template(isolated_settings, monkeypatch):
+    from alerts import telegram as tg
+
+    sent: list[str] = []
+    monkeypatch.setattr(tg, "send_message", lambda text: sent.append(text) or True)
+
+    retail = {
+        "city": "Pune",
+        "date": "2026-09-15",
+        "per_gram": {"24k": 15317.0, "22k": 14041.0, "18k": 11488.0},
+        "pct_change": {"24k": -0.597, "22k": -0.594, "18k": -0.597},
+    }
+    retail["per_10g"] = {k: v * 10 for k, v in retail["per_gram"].items()}
+    ok = tg.daily_digest(
+        retail=retail,
+        usd_inr_rate=95.9325,
+        usd_inr_rate_date="2026-09-15",
+        forecast_info={
+            "horizon": "1m",
+            "median_inr_22k_10g": 139950.0,
+            "pct": -0.33,
+            "premium_ratio": 1.148,
+        },
+        active_targets=1,
+    )
+    assert ok is True
+    text = sent[-1]
+    assert "Pune retail (Groww)" in text
+    assert "22K/10g: Rs 1,40,410" in text
+    assert "24K/10g: Rs 1,53,170" in text
+    assert "-0.59%" in text
+    assert "est." in text
+    assert "Active price alerts: 1" in text
+    assert "Not investment advice" in text
+
+
 def test_daily_digest_disabled_without_config(monkeypatch, isolated_settings):
     from alerts import telegram as tg
 
     monkeypatch.setattr(settings, "telegram_bot_token", "")
-    assert tg.daily_digest(make_history(n=30), 83.0, dt.date(2026, 9, 15), None) is False
+    assert tg.daily_digest(None, None, None, None) is False
 
 
 def test_alert_api_endpoints(isolated_settings, monkeypatch):
