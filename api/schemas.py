@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 
 Granularity = Literal["day", "week", "month"]
 HorizonPreset = Literal["1w", "1m", "3m", "6m", "1y"]
+Currency = Literal["usd", "inr"]
+Karat = Literal["24k", "22k", "18k"]
+Unit = Literal["gram", "10gram"]
 
 
 class OhlcPoint(BaseModel):
@@ -20,12 +23,33 @@ class OhlcPoint(BaseModel):
     volume: float | None = None
 
 
+class RateInfo(BaseModel):
+    """Transparency metadata for currency conversion (present when currency=inr)."""
+
+    usd_inr_rate: float
+    usd_inr_rate_date: dt.date
+    rate_may_be_stale: bool
+    # Theoretical bullion-equivalent conversion; NOT Indian retail pricing.
+    # Historical points use each date's own USD/INR rate (per-date, backward
+    # as-of); the latest rate applies to the forecast segment.
+    disclaimer: str = (
+        "Converted from COMEX USD futures — theoretical bullion-equivalent "
+        "price, not an Indian retail/jeweler quote (which also includes import "
+        "duty, GST, and making charges). Historical points use each date's "
+        "USD/INR rate; the forecast segment uses the latest rate."
+    )
+
+
 class HistoryResponse(BaseModel):
     start: dt.date
     end: dt.date
     granularity: Granularity
     source: str
     points: list[OhlcPoint]
+    currency: Currency = "usd"
+    karat: Karat | None = None
+    unit: Unit | None = None
+    rate: RateInfo | None = None
 
 
 class BaselineSeries(BaseModel):
@@ -48,6 +72,10 @@ class ForecastResponse(BaseModel):
     q90: list[float]
     quantiles: bool
     baselines: list[BaselineSeries]
+    currency: Currency = "usd"
+    karat: Karat | None = None
+    unit: Unit | None = None
+    rate: RateInfo | None = None
 
 
 class BacktestFoldOut(BaseModel):

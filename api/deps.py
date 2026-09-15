@@ -77,6 +77,7 @@ def _bootstrap() -> None:
         import datetime as dt
 
         from ingestion.fetch_gold_prices import load_canonical, update_canonical
+        from ingestion.usdinr import fetch_usdinr_rate
 
         try:
             load_canonical()
@@ -85,6 +86,19 @@ def _bootstrap() -> None:
             update_canonical(
                 dt.date.fromisoformat(settings.history_start), dt.date.today()
             )
+        # FX series for the INR view. Full history window on first seed so
+        # every historical gold date has a rate; later runs just top up.
+        try:
+            fx_start = dt.date.today() - dt.timedelta(days=14)
+            from ingestion.usdinr import load_usdinr
+
+            try:
+                load_usdinr()
+            except FileNotFoundError:
+                fx_start = dt.date.fromisoformat(settings.history_start)
+            fetch_usdinr_rate(fx_start, dt.date.today())
+        except Exception as fx_exc:  # noqa: BLE001 - gold view must not depend on FX
+            logger.warning("USDINR seeding failed: %s", fx_exc)
         get_service()
     except Exception as exc:  # noqa: BLE001 - bootstrap failures surface via /health
         _bootstrap_error = str(exc)

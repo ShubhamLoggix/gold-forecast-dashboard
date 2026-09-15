@@ -18,11 +18,14 @@ import {
   fetchHealth,
   fetchHistory,
   type BacktestResponse,
+  type Currency,
   type ForecastResponse,
   type Granularity,
   type HealthResponse,
   type HistoryResponse,
   type Horizon,
+  type Karat,
+  type Unit,
 } from "./api";
 
 const GRANULARITIES: Granularity[] = ["day", "week", "month"];
@@ -34,6 +37,17 @@ const RANGES: { label: string; days: number | null }[] = [
   { label: "Max", days: null },
 ];
 const HORIZONS: Horizon[] = ["1w", "1m", "3m", "6m", "1y"];
+const KARATS: Karat[] = ["24k", "22k", "18k"];
+const UNITS: { id: Unit; label: string }[] = [
+  { id: "10gram", label: "per 10g" },
+  { id: "gram", label: "per g" },
+];
+
+const INR_CAPTION =
+  "Converted from COMEX USD futures at the live USD/INR rate — this is a theoretical " +
+  "bullion-equivalent price, not an Indian retail/jeweler quote, which also includes " +
+  "import duty, GST, and making charges. Historical points use each date's own " +
+  "USD/INR rate; the forecast uses the latest rate.";
 
 interface Row {
   date: string;
@@ -113,7 +127,12 @@ function buildRows(hist: HistoryResponse, fc: ForecastResponse): Row[] {
 }
 
 function toCsv(hist: HistoryResponse, fc: ForecastResponse): string {
-  const lines = ["date,close,forecast_point,q10,q50,q90,naive_last_value,sma_20"];
+  const currency = fc.currency ?? "usd";
+  const karat = fc.karat ?? "";
+  const unit = fc.unit ?? "";
+  const lines = [
+    `date,close,forecast_point,q10,q50,q90,naive_last_value,sma_20,currency,karat,unit`,
+  ];
   const histIdx = new Map(hist.points.map((p) => [p.date, p.close]));
   const allDates = [
     ...hist.points.map((p) => p.date),
@@ -130,6 +149,9 @@ function toCsv(hist: HistoryResponse, fc: ForecastResponse): string {
       i >= 0 ? fc.q90[i].toFixed(4) : "",
       i >= 0 ? fc.baselines[0]?.values[i].toFixed(4) ?? "" : "",
       i >= 0 ? fc.baselines[1]?.values[i].toFixed(4) ?? "" : "",
+      currency,
+      karat,
+      unit,
     ];
     lines.push(cols.join(","));
   }
@@ -140,6 +162,9 @@ export default function App() {
   const [granularity, setGranularity] = useState<Granularity>("day");
   const [rangeLabel, setRangeLabel] = useState("1Y");
   const [horizon, setHorizon] = useState<Horizon>("1m");
+  const [currency, setCurrency] = useState<Currency>("usd");
+  const [karat, setKarat] = useState<Karat>("22k");
+  const [unit, setUnit] = useState<Unit>("10gram");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [useCustom, setUseCustom] = useState(false);
@@ -151,12 +176,27 @@ export default function App() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const isInr = currency === "inr";
+  const unitLabel = isInr
+    ? `INR per ${unit === "10gram" ? "10g" : "g"} (${karat.toUpperCase()}, bullion-equiv.)`
+    : "USD/oz (COMEX GC=F)";
+
+  const formatValue = useCallback(
+    (v: number) => isInr ? `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : `$${v.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+    [isInr],
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const range = RANGES.find((r) => r.label === rangeLabel)!;
-      const params: Parameters<typeof fetchHistory>[0] = { granularity };
+      const params: Parameters<typeof fetchHistory>[0] = {
+        granularity,
+        currency,
+        karat,
+        unit,
+      };
       if (useCustom && customStart) params.start = customStart;
       if (useCustom && customEnd) params.end = customEnd;
       if (!useCustom && range.days) {
@@ -167,7 +207,7 @@ export default function App() {
       }
       const [h, f, b, hl] = await Promise.all([
         fetchHistory(params),
-        fetchForecast(horizon),
+        fetchForecast(horizon, true, currency, karat, unit),
         fetchBacktest().catch(() => null),
         fetchHealth().catch(() => null),
       ]);
@@ -180,7 +220,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [granularity, rangeLabel, horizon, useCustom, customStart, customEnd]);
+  }, [granularity, rangeLabel, horizon, currency, karat, unit, useCustom, customStart, customEnd]);
 
   useEffect(() => {
     void load();
@@ -202,8 +242,15 @@ export default function App() {
     const blob = new Blob([toCsv(history, forecast)], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `gold_forecast_${forecast.horizon}_${new Date().toISOString().slice(0, 10)}.csv`;
+    const unitTag =
+      forecast.currency === "inr"
+        ? forecast.unit === "gram" ? "per1g" : "per10g"
+        : "peroz";
+    a.download =
+      `gold_forecast_${forecast.horizon}_${forecast.currency}` +
+      `${forecast.karat ? `_${forecast.karat}` : ""}` +
+      `_${unitTag}` +
+      `_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -220,6 +267,52 @@ export default function App() {
       )}
 
       <div className="controls">
+        <div className="control-group">
+          <label>Currency</label>
+          <div className="seg">
+            {(["usd", "inr"] as Currency[]).map((c) => (
+              <button
+                key={c}
+                className={currency === c ? "active" : ""}
+                onClick={() => setCurrency(c)}
+              >
+                {c.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+        {isInr && (
+          <>
+            <div className="control-group">
+              <label>Karat</label>
+              <div className="seg">
+                {KARATS.map((k) => (
+                  <button
+                    key={k}
+                    className={karat === k ? "active" : ""}
+                    onClick={() => setKarat(k)}
+                  >
+                    {k.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="control-group">
+              <label>Unit</label>
+              <div className="seg">
+                {UNITS.map((u) => (
+                  <button
+                    key={u.id}
+                    className={unit === u.id ? "active" : ""}
+                    onClick={() => setUnit(u.id)}
+                  >
+                    {u.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
         <div className="control-group">
           <label>Granularity</label>
           <div className="seg">
@@ -306,10 +399,13 @@ export default function App() {
       ) : (
         <>
           <div className="metrics">
-            <Metric label="Last close (GC=F)" value={`$${lastClose?.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
+            <Metric
+              label={isInr ? `Last close (${karat.toUpperCase()}, per ${unit === "10gram" ? "10g" : "g"})` : "Last close (GC=F)"}
+              value={lastClose != null ? formatValue(lastClose) : "—"}
+            />
             <Metric
               label={`Forecast ${horizon} (median)`}
-              value={medianEnd ? `$${medianEnd.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}
+              value={medianEnd != null ? formatValue(medianEnd) : "—"}
               delta={impliedPct != null ? `${impliedPct >= 0 ? "+" : ""}${impliedPct.toFixed(1)}%` : undefined}
               deltaColor={impliedPct != null && impliedPct >= 0 ? "up" : "down"}
             />
@@ -333,7 +429,7 @@ export default function App() {
                 <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11 }} width={70} />
                 <Tooltip
                   formatter={(value: number | string) =>
-                    typeof value === "number" ? `$${value.toFixed(2)}` : value
+                    typeof value === "number" ? formatValue(value) : value
                   }
                 />
                 <Legend />
@@ -361,7 +457,25 @@ export default function App() {
                 <ReferenceLine x={forecast?.history_last_date} stroke="#d9a406" strokeDasharray="4 4" label="today" />
               </ComposedChart>
             </ResponsiveContainer>
-            <div className="chart-caption">
+            <div className="chart-caption" data-testid="unit-label" style={{ fontWeight: 600 }}>
+              {unitLabel}
+            </div>
+            {isInr && (
+              <div className="chart-caption" data-testid="inr-disclaimer" style={{ marginTop: 6 }}>
+                {INR_CAPTION}
+                {forecast?.rate && (
+                  <>
+                    {" "}Converted at ₹{forecast.rate.usd_inr_rate.toFixed(4)}/USD as of{" "}
+                    {forecast.rate.usd_inr_rate_date}
+                    {forecast.rate.rate_may_be_stale && (
+                      <strong> (rate may be stale — last available FX date used)</strong>
+                    )}
+                    .
+                  </>
+                )}
+              </div>
+            )}
+            <div className="chart-caption" style={{ marginTop: 6 }}>
               Shaded area = p10–p90 quantile band; dashed/dotted lines are naive
               baselines. If TimesFM does not clearly beat them, it is not adding value.
             </div>
@@ -399,6 +513,15 @@ export default function App() {
                 <strong>Data source:</strong> COMEX Gold Futures (GC=F) via Yahoo Finance;
                 last data date {history?.end}
               </li>
+              {isInr && forecast?.rate && (
+                <li>
+                  <strong>INR conversion:</strong> ₹{forecast.rate.usd_inr_rate.toFixed(4)}/USD as
+                  of {forecast.rate.usd_inr_rate_date}
+                  {forecast.rate.rate_may_be_stale && " (rate may be stale)"}. Theoretical
+                  bullion-equivalent price at {karat.toUpperCase()} purity — <em>not</em> an
+                  Indian retail/jeweler quote (import duty, GST, and making charges excluded).
+                </li>
+              )}
               <li>
                 <strong>Known limitations:</strong> zero-shot TSFMs perform near chance
                 level (~50% directional accuracy) on financial series; the quantile band

@@ -1,15 +1,29 @@
-> ⚠️ **Disclaimer:** This project is a *forecasting demo*, not investment advice. Price forecasts are
-> experimental; gold/financial time series are close to random walks. Do **not** use this as the sole
-> basis for any financial decision. See [LIMITATIONS.md](LIMITATIONS.md).
-
 # Gold Price Forecasting Dashboard (TimesFM)
 
 Production-ready dashboard that ingests real gold price data (COMEX `GC=F` via `yfinance`), forecasts
 future prices with Google Research's **TimesFM** foundation model, compares against naive baselines,
 and validates everything with a walk-forward backtest — all displayed in an interactive dashboard.
 
+> ⚠️ **Disclaimer:** This project is a *forecasting demo*, not investment advice. Price forecasts are
+> experimental; gold/financial time series are close to random walks. Do **not** use this as the sole
+> basis for any financial decision. See [LIMITATIONS.md](LIMITATIONS.md).
+
 > Project path on this machine: `D:\projects\gold-forecast-dashboard` (migrated from C: for disk
 > space; model + pip caches also live on D:).
+
+## INR / karat view (24K, 22K, 18K)
+
+Both the API and the dashboards can display the same historical, forecast, and baseline series
+converted to **INR per gram or per 10 grams** (the conventional Indian quote) at 24K/22K/18K
+purity, using the daily USD/INR rate (yfinance `INR=X`, cached alongside the gold data).
+
+**Important honesty note:** the converted figure is a *theoretical bullion-equivalent price* —
+COMEX is the international wholesale/futures price. Real Indian retail/jeweler prices are
+noticeably higher because they also include **import duty, GST, and making charges**. The
+dashboard labels this explicitly (persistent caption under the chart in INR mode and in the
+model-info panel); don't compare the converted value against a jeweler's quote and expect them
+to match. The conversion metadata (`₹X/USD as of DATE`, staleness flag) is always shown for
+transparency.
 
 ## Architecture
 

@@ -23,9 +23,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from config import settings
+from conversion import PURITY_FACTORS, TROY_OZ_TO_GRAM, UNIT_FACTORS, convert_series
 from forecasting.baselines import naive_last_value, simple_moving_average
 from forecasting.timesfm_service import HORIZON_PRESETS, GoldForecastService
 from ingestion.fetch_gold_prices import update_canonical
+from ingestion.usdinr import latest_rate
 from logging_setup import setup_logging
 
 setup_logging(settings.log_level)
@@ -100,9 +102,17 @@ def load_latest_backtest() -> dict | None:
 # Data refresh / backtest actions
 # --------------------------------------------------------------------------- #
 def refresh_data() -> None:
-    from ingestion.fetch_gold_prices import update_canonical
+    import datetime as dt_
 
-    update_canonical(dt.date.fromisoformat(settings.history_start), dt.date.today())
+    from ingestion.fetch_gold_prices import update_canonical
+    from ingestion.usdinr import fetch_usdinr_rate
+
+    update_canonical(dt_.date.fromisoformat(settings.history_start), dt_.date.today())
+    # Same schedule/side-effect as the API's daily job: refresh FX alongside gold.
+    try:
+        fetch_usdinr_rate(dt_.date.today() - dt_.timedelta(days=14), dt_.date.today())
+    except Exception as exc:  # noqa: BLE001 - FX failure must not kill gold refresh
+        logger.warning("USDINR refresh failed: %s", exc)
     get_history.clear()
     cached_forecast.clear()
 
@@ -244,6 +254,17 @@ with st.sidebar:
     )
     horizon_label = st.radio("Forecast horizon", list(HORIZON_PRESETS.keys()))
     st.divider()
+    currency = st.radio("Currency", ["USD", "INR"], horizontal=True)
+    karat = "24k"
+    unit = "10gram"
+    if currency == "INR":
+        karat = st.radio(
+            "Karat (INR view)", ["24k", "22k", "18k"], index=1, horizontal=True
+        )
+        unit = st.radio(
+            "Quoting unit (INR view)", ["10gram", "gram"], horizontal=True
+        )
+    st.divider()
     if st.button("Refresh data from yfinance", width="stretch"):
         with st.spinner("Fetching latest prices..."):
             refresh_data()
@@ -262,6 +283,8 @@ n_show = RANGE_PRESETS[range_label]
 history_view = history_full.tail(n_show) if n_show else history_full
 horizon_days = HORIZON_PRESETS[horizon_label]
 
+is_inr = currency == "INR"
+
 try:
     forecast = cached_forecast(history_full, horizon_days)
 except Exception as exc:  # noqa: BLE001
@@ -271,14 +294,67 @@ except Exception as exc:  # noqa: BLE001
 naive = naive_last_value(history_full, horizon_days)
 sma = simple_moving_average(history_full, horizon_days)
 
+unit_label = (
+    f"INR per {'10g' if unit == '10gram' else 'g'} ({karat.upper()}, bullion-equiv.)"
+    if is_inr
+    else "USD/oz (COMEX GC=F)"
+)
+value_prefix = "₹" if is_inr else "$"
+rate_info = None
+
+if is_inr:
+    try:
+        rate_info = latest_rate(reference_date=history_full["date"].iloc[-1].date())
+    except FileNotFoundError:
+        st.error(
+            "INR view needs the USD/INR rate series — click **Refresh data** to fetch it.",
+            icon="🚫",
+        )
+        st.stop()
+    rate = rate_info["rate"]
+    # Per-date conversion for history (each date uses its own USD/INR rate,
+    # backward as-of, never interpolated); forecast segment uses the latest rate.
+    from ingestion.usdinr import rate_frame_for_dates
+
+    history_disp = history_view.copy()
+    fx = rate_frame_for_dates(history_disp["date"])
+    factor = (
+        fx["usd_inr_rate"].astype(float) / TROY_OZ_TO_GRAM
+        * PURITY_FACTORS[karat] * UNIT_FACTORS[unit]
+    ).to_numpy()
+    for col in ("open", "high", "low", "close"):
+        history_disp[col] = history_disp[col].astype(float) * factor
+    forecast_conv = {
+        **forecast,
+        "point": convert_series(forecast["point"], rate, karat, unit).tolist(),
+        "q10": convert_series(forecast["q10"], rate, karat, unit).tolist(),
+        "q50": convert_series(forecast["q50"], rate, karat, unit).tolist(),
+        "q90": convert_series(forecast["q90"], rate, karat, unit).tolist(),
+    }
+    naive_conv = convert_series(naive, rate, karat, unit)
+    sma_conv = convert_series(sma, rate, karat, unit)
+    last_close_conv = float(
+        history_full["close"].iloc[-1] * rate / TROY_OZ_TO_GRAM
+        * PURITY_FACTORS[karat] * UNIT_FACTORS[unit]
+    )
+else:
+    history_disp = history_view
+    forecast_conv = forecast
+    naive_conv = naive
+    sma_conv = sma
+    last_close_conv = float(history_full["close"].iloc[-1])
+
 # ----------------------------- metrics panel ------------------------------ #
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Last close", f"${history_full['close'].iloc[-1]:,.2f}")
-median_end = forecast["q50"][-1]
+col1.metric(
+    "Last close" if not is_inr else f"Last close ({karat.upper()}, per {'10g' if unit == '10gram' else 'g'})",
+    f"{value_prefix}{last_close_conv:,.2f}",
+)
+median_end = forecast_conv["q50"][-1]
 implied = (median_end / history_full["close"].iloc[-1] - 1) * 100
 col2.metric(
     f"Forecast {horizon_label} (median)",
-    f"${median_end:,.2f}",
+    f"{value_prefix}{median_end:,.2f}",
     f"{implied:+.1f}%",
     delta_color="normal",
 )
@@ -296,9 +372,26 @@ else:
     col4.metric("Backtest dir. accuracy", "n/a")
 
 # ----------------------------- main chart --------------------------------- #
-agg = aggregate_history(history_view, granularity)
-fig = build_figure(agg, forecast, naive, sma)
+agg = aggregate_history(history_disp, granularity)
+fig = build_figure(agg, forecast_conv, naive_conv, sma_conv)
+fig.update_yaxes(title=unit_label)
 st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
+if is_inr:
+    st.caption(
+        "Converted from COMEX USD futures at the live USD/INR rate — this is a theoretical "
+        "bullion-equivalent price, not an Indian retail/jeweler quote, which also includes "
+        "import duty, GST, and making charges. Historical points use each date's USD/INR "
+        "rate; the forecast uses the latest rate."
+    )
+    if rate_info is not None:
+        stale_note = (
+            " (rate may be stale — last available FX date used)"
+            if rate_info["rate_may_be_stale"]
+            else ""
+        )
+        st.caption(
+            f"Converted at ₹{rate_info['rate']:.4f}/USD as of {rate_info['rate_date']}{stale_note}."
+        )
 st.caption(
     "Shaded area = p10-p90 quantile band. Dashed/dotted lines are naive baselines "
     "(last-value carry-forward, 20-day moving average). If the gold line is not "
@@ -333,6 +426,16 @@ with st.expander("Model info"):
         if drift
         else "- **Drift watchdog:** no backtest report yet — run one from the sidebar.\n"
     )
+    inr_note = (
+        (
+            f"- **INR conversion:** ₹{rate_info['rate']:.4f}/USD as of {rate_info['rate_date']}"
+            f"{(' — rate may be stale' if rate_info['rate_may_be_stale'] else '')}. "
+            f"Theoretical bullion-equivalent at {karat.upper()} purity — *not* an Indian "
+            f"retail/jeweler quote (import duty, GST, making charges excluded).\n"
+        )
+        if is_inr and rate_info
+        else ""
+    )
     st.markdown(
         f"""
 - **Model:** TimesFM {settings.model_version} (`google/timesfm-2.5-200m-pytorch` /
@@ -343,7 +446,7 @@ with st.expander("Model info"):
   the exact training cutoff is not documented precisely — the model was *not* trained on
   up-to-the-minute gold data)
 - **Last data refresh:** {last_refresh:%Y-%m-%d %H:%M} ({len(history_full)} trading days, source: COMEX GC=F via yfinance)
-{drift_note}- **Known limitations:** zero-shot foundation models on financial series perform close to
+{drift_note}{inr_note}- **Known limitations:** zero-shot foundation models on financial series perform close to
   chance level (~50% directional accuracy); quantile bands reflect model-internal
   uncertainty, not calibrated risk. Improvement requires financial-domain fine-tuning,
   which this project does not include by default.

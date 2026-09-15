@@ -30,9 +30,11 @@ from api.schemas import (
     HealthResponse,
     HistoryResponse,
     OhlcPoint,
+    RateInfo,
     RefreshResponse,
 )
 from config import settings
+from conversion import PURITY_FACTORS, TROY_OZ_TO_GRAM, UNIT_FACTORS, convert_series
 from forecasting.baselines import naive_last_value, simple_moving_average
 from forecasting.timesfm_service import HORIZON_PRESETS, GoldForecastService
 from ingestion.aggregate import aggregate_history
@@ -147,8 +149,44 @@ def _rate_limit_public(request: Request, bucket: str) -> None:
         )
 
 
+def _rate_model(rate_info: dict) -> RateInfo:
+    """Map ingestion rate dict -> RateInfo schema."""
+    return RateInfo(
+        usd_inr_rate=rate_info["rate"],
+        usd_inr_rate_date=rate_info["rate_date"],
+        rate_may_be_stale=rate_info["rate_may_be_stale"],
+    )
+
+
+def _resolve_rate_info(reference_date: dt.date | None = None) -> dict:
+    """Latest USDINR rate for conversion (raises 503 if the series is absent)."""
+    from ingestion.usdinr import latest_rate
+
+    try:
+        return latest_rate(reference_date=reference_date)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "USDINR rate series not available yet — it refreshes with the daily "
+                "ingestion job, or run fetch_usdinr_rate() manually."
+            ),
+        ) from exc
+
+
+def _convert_values(values, rate: float, karat: str, unit: str):
+    from conversion import convert_series
+
+    return convert_series(values, rate, karat, unit).tolist()
+
+
 def _history_response(
-    start: dt.date | None, end: dt.date | None, granularity: str
+    start: dt.date | None,
+    end: dt.date | None,
+    granularity: str,
+    currency: str = "usd",
+    karat: str = "24k",
+    unit: str = "10gram",
 ) -> HistoryResponse:
     df = deps.get_history()
     if start is not None:
@@ -158,12 +196,29 @@ def _history_response(
     if df.empty:
         raise HTTPException(status_code=404, detail="No data in requested range")
     agg = aggregate_history(df, granularity)
-    return HistoryResponse(
-        start=pd.Timestamp(agg["date"].iloc[0]).date(),
-        end=pd.Timestamp(agg["date"].iloc[-1]).date(),
-        granularity=granularity,  # type: ignore[arg-type]
-        source=str(df["source"].iloc[-1]),
-        points=[
+
+    rate_info = None
+    if currency == "inr":
+        # Per-date conversion: each historical point uses the USD/INR rate of
+        # its own date (most recent prior available rate; never interpolated).
+        # The LATEST rate (returned in `rate`) applies to the most recent point
+        # and is what the frontend captions as "converted at ₹X/USD as of DATE".
+        from ingestion.usdinr import rate_frame_for_dates
+
+        rate_info = _resolve_rate_info(reference_date=pd.Timestamp(df["date"].iloc[-1]).date())
+        fx = rate_frame_for_dates(agg["date"])
+        factor = (
+            fx["usd_inr_rate"].astype(float)
+            / TROY_OZ_TO_GRAM
+            * PURITY_FACTORS[karat]
+            * UNIT_FACTORS[unit]
+        ).to_numpy()
+        for col in ("open", "high", "low", "close"):
+            agg[col] = agg[col].astype(float) * factor
+        # volume is unit-agnostic and stays untouched
+    points = []
+    for _, r in agg.iterrows():
+        points.append(
             OhlcPoint(
                 date=pd.Timestamp(r["date"]).date(),
                 open=None if pd.isna(r["open"]) else float(r["open"]),
@@ -172,8 +227,17 @@ def _history_response(
                 close=float(r["close"]),
                 volume=None if r["volume"] is None or pd.isna(r["volume"]) else float(r["volume"]),
             )
-            for _, r in agg.iterrows()
-        ],
+        )
+    return HistoryResponse(
+        start=pd.Timestamp(agg["date"].iloc[0]).date(),
+        end=pd.Timestamp(agg["date"].iloc[-1]).date(),
+        granularity=granularity,  # type: ignore[arg-type]
+        source=str(df["source"].iloc[-1]),
+        points=points,
+        currency=currency,  # type: ignore[arg-type]
+        karat=karat if currency == "inr" else None,  # type: ignore[arg-type]
+        unit=unit if currency == "inr" else None,  # type: ignore[arg-type]
+        rate=_rate_model(rate_info) if rate_info else None,
     )
 
 
@@ -182,18 +246,24 @@ def get_history(
     start: dt.date | None = Query(default=None),
     end: dt.date | None = Query(default=None),
     granularity: str = Query(default="day", pattern="^(day|week|month)$"),
+    currency: str = Query(default="usd", pattern="^(usd|inr)$"),
+    karat: str = Query(default="24k", pattern="^(24k|22k|18k)$"),
+    unit: str = Query(default="10gram", pattern="^(gram|10gram)$"),
     request: Request = None,  # type: ignore[assignment]
 ):
     _rate_limit_public(request, "history")
-    key = ("history", start, end, granularity)
+    key = ("history", start, end, granularity, currency, karat, unit)
     cached = deps.cache_get(key)
     if cached is None:
-        cached = _history_response(start, end, granularity)
+        cached = _history_response(start, end, granularity, currency, karat, unit)
         deps.cache_set(key, cached)
     return cached
 
 
-def _forecast_response(horizon: str, quantiles: bool) -> ForecastResponse:
+def _forecast_response(
+    horizon: str, quantiles: bool, currency: str = "usd", karat: str = "24k",
+    unit: str = "10gram",
+) -> ForecastResponse:
     import datetime as dt_
 
     preset_days = HORIZON_PRESETS[horizon]
@@ -202,6 +272,25 @@ def _forecast_response(horizon: str, quantiles: bool) -> ForecastResponse:
     result = service.forecast(df, preset_days, quantiles=quantiles)
     naive = naive_last_value(df, preset_days)
     sma = simple_moving_average(df, preset_days)
+
+    rate_info = None
+    point, q10, q50, q90 = (
+        result.point, result.q10, result.q50, result.q90,
+    )
+    if currency == "inr":
+        rate_info = _resolve_rate_info(reference_date=result.history_last_date)
+        rate = rate_info["rate"]
+        point = convert_series(point, rate, karat, unit)
+        q10 = convert_series(q10, rate, karat, unit)
+        q50 = convert_series(q50, rate, karat, unit)
+        q90 = convert_series(q90, rate, karat, unit)
+        naive = convert_series(naive, rate, karat, unit)
+        sma = convert_series(sma, rate, karat, unit)
+        history_last_close = float(result.last_close * rate
+                                    / TROY_OZ_TO_GRAM * PURITY_FACTORS[karat]
+                                    * UNIT_FACTORS[unit])
+    else:
+        history_last_close = result.last_close
     return ForecastResponse(
         horizon=horizon,  # type: ignore[arg-type]
         horizon_days=preset_days,
@@ -209,17 +298,21 @@ def _forecast_response(horizon: str, quantiles: bool) -> ForecastResponse:
         generated_at=dt_.datetime.now(dt_.timezone.utc),
         latency_ms=result.latency_ms,
         history_last_date=result.history_last_date,
-        history_last_close=result.last_close,
+        history_last_close=history_last_close,
         dates=result.dates,
-        point=result.point.tolist(),
-        q10=result.q10.tolist(),
-        q50=result.q50.tolist(),
-        q90=result.q90.tolist(),
+        point=point.tolist(),
+        q10=q10.tolist(),
+        q50=q50.tolist(),
+        q90=q90.tolist(),
         quantiles=quantiles,
         baselines=[
             BaselineSeries(name="naive-last-value", values=naive.tolist()),
             BaselineSeries(name="sma-20", values=sma.tolist()),
         ],
+        currency=currency,  # type: ignore[arg-type]
+        karat=karat if currency == "inr" else None,  # type: ignore[arg-type]
+        unit=unit if currency == "inr" else None,  # type: ignore[arg-type]
+        rate=_rate_model(rate_info) if rate_info else None,
     )
 
 
@@ -227,13 +320,16 @@ def _forecast_response(horizon: str, quantiles: bool) -> ForecastResponse:
 def get_forecast(
     horizon: str = Query(default="1m", pattern="^(1w|1m|3m|6m|1y)$"),
     quantiles: bool = Query(default=True),
+    currency: str = Query(default="usd", pattern="^(usd|inr)$"),
+    karat: str = Query(default="24k", pattern="^(24k|22k|18k)$"),
+    unit: str = Query(default="10gram", pattern="^(gram|10gram)$"),
     request: Request = None,  # type: ignore[assignment]
 ):
     _rate_limit_public(request, "forecast")
-    key = ("forecast", horizon, quantiles, settings.model_version)
+    key = ("forecast", horizon, quantiles, settings.model_version, currency, karat, unit)
     cached = deps.cache_get(key)
     if cached is None:
-        cached = _forecast_response(horizon, quantiles)
+        cached = _forecast_response(horizon, quantiles, currency, karat, unit)
         deps.cache_set(key, cached)
     return cached
 

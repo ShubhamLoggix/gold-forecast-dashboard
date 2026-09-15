@@ -66,14 +66,25 @@ def daily_refresh_job() -> None:
         import api.deps as deps
 
         from ingestion.fetch_gold_prices import update_canonical
+        from ingestion.usdinr import fetch_usdinr_rate
 
         df = update_canonical(
             dt.date.fromisoformat(settings.history_start), dt.date.today(),
             force_refresh=False,
         )
+        # Refresh the USD/INR FX series on the same schedule. Full-window fetch
+        # if the canonical file doesn't exist yet, else a recent top-up.
+        fx_start = dt.date.today() - dt.timedelta(days=14)
+        try:
+            from ingestion.usdinr import load_usdinr
+
+            load_usdinr()
+        except FileNotFoundError:
+            fx_start = dt.date.fromisoformat(settings.history_start)
+        fetch_usdinr_rate(fx_start, dt.date.today())
         deps.invalidate_response_cache()
         deps.last_refresh_ok = True
-        logger.info("Scheduled data refresh done (rows=%d).", len(df))
+        logger.info("Scheduled data refresh done (gold rows=%d).", len(df))
     except Exception:  # noqa: BLE001 - scheduled jobs must not crash the API
         deps.last_refresh_ok = False
         logger.error("Scheduled data refresh FAILED:\n%s", traceback.format_exc())

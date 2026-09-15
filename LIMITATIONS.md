@@ -44,6 +44,23 @@ fine-tuning lands near 50% directional accuracy.
 - A demonstration of the engineering pipeline (ingestion → validation →
   forecasting → backtesting → dashboard), **not** a trading signal.
 
+## COMEX vs Indian retail prices (INR/karat view)
+
+The INR view converts COMEX USD/futures prices to INR/gram (or per 10 g) at 24K/22K/18K purity
+using the USD/INR exchange rate. **This is a theoretical bullion-equivalent price, not an Indian
+retail/jeweler quote.** Real Indian retail prices sit noticeably higher because they stack on top
+of the international price:
+
+1. **Import duty** (set by the Government of India, changes over time),
+2. **GST** (3% on gold; making-charges GST applies as well),
+3. **Dealer/jeweler making charges** (highly variable, often 5–20%+ of value on jewelry).
+
+So a converted figure of, say, ₹1,22,500 per 10 g (22K) can coexist with an actual jeweler price
+well above ₹1,30,000 for the same weight. The dashboard labels the converted series as
+bullion-equivalent everywhere (persistent caption in INR mode, API `RateInfo.disclaimer`), and
+shows the exact rate and its date used for the conversion. Do not use the converted figure as an
+arbitrage or "fair price" reference against retail quotes.
+
 ## Model-drift watchdog
 
 The project includes an automatic honesty check: after every backtest run

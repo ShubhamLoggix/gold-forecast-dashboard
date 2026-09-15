@@ -3,6 +3,16 @@ const BASE = import.meta.env.VITE_API_URL ?? ""; // "" => same-origin (vite prox
 
 export type Granularity = "day" | "week" | "month";
 export type Horizon = "1w" | "1m" | "3m" | "6m" | "1y";
+export type Currency = "usd" | "inr";
+export type Karat = "24k" | "22k" | "18k";
+export type Unit = "gram" | "10gram";
+
+export interface RateInfo {
+  usd_inr_rate: number;
+  usd_inr_rate_date: string;
+  rate_may_be_stale: boolean;
+  disclaimer: string;
+}
 
 export interface OhlcPoint {
   date: string;
@@ -19,6 +29,10 @@ export interface HistoryResponse {
   granularity: Granularity;
   source: string;
   points: OhlcPoint[];
+  currency: Currency;
+  karat: Karat | null;
+  unit: Unit | null;
+  rate: RateInfo | null;
 }
 
 export interface BaselineSeries {
@@ -41,6 +55,10 @@ export interface ForecastResponse {
   q90: number[];
   quantiles: boolean;
   baselines: BaselineSeries[];
+  currency: Currency;
+  karat: Karat | null;
+  unit: Unit | null;
+  rate: RateInfo | null;
 }
 
 export interface BacktestResponse {
@@ -109,16 +127,31 @@ export const fetchHistory = (params: {
   start?: string;
   end?: string;
   granularity: Granularity;
+  currency?: Currency;
+  karat?: Karat;
+  unit?: Unit;
 }) => {
   const q = new URLSearchParams();
   if (params.start) q.set("start", params.start);
   if (params.end) q.set("end", params.end);
   q.set("granularity", params.granularity);
+  if (params.currency) q.set("currency", params.currency);
+  if (params.karat) q.set("karat", params.karat);
+  if (params.unit) q.set("unit", params.unit);
   return request<HistoryResponse>(`/api/v1/history?${q.toString()}`);
 };
 
-export const fetchForecast = (horizon: Horizon, quantiles = true) =>
-  request<ForecastResponse>(`/api/v1/forecast?horizon=${horizon}&quantiles=${quantiles}`);
+export const fetchForecast = (
+  horizon: Horizon,
+  quantiles = true,
+  currency: Currency = "usd",
+  karat: Karat = "24k",
+  unit: Unit = "10gram",
+) =>
+  request<ForecastResponse>(
+    `/api/v1/forecast?horizon=${horizon}&quantiles=${quantiles}` +
+      `&currency=${currency}&karat=${karat}&unit=${unit}`,
+  );
 
 export const fetchBacktest = () =>
   request<BacktestResponse>(`/api/v1/backtest/latest`);
