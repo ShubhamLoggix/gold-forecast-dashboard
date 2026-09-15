@@ -14,6 +14,7 @@ import {
 import {
   ApiError,
   fetchBacktest,
+  fetchAccountability,
   fetchBacktestScoreboard,
   fetchForecast,
   fetchHealth,
@@ -22,6 +23,7 @@ import {
   fetchIndiaForecast,
   fetchIndiaRates,
   type BacktestResponse,
+  type AccountabilityResponse,
   type BacktestScoreboard,
   type Currency,
   type ForecastResponse,
@@ -203,6 +205,7 @@ export default function App() {
   const [indiaError, setIndiaError] = useState<ApiError | null>(null);
   const [indiaLoading, setIndiaLoading] = useState(false);
   const [scoreboard, setScoreboard] = useState<BacktestScoreboard | null>(null);
+  const [accountability, setAccountability] = useState<AccountabilityResponse | null>(null);
 
   const [history, setHistory] = useState<HistoryResponse | null>(null);
   const [forecast, setForecast] = useState<ForecastResponse | null>(null);
@@ -298,6 +301,9 @@ export default function App() {
     fetchBacktestScoreboard()
       .then(setScoreboard)
       .catch(() => setScoreboard(null));
+    fetchAccountability()
+      .then(setAccountability)
+      .catch(() => setAccountability(null));
   }, []);
 
   const rows = useMemo(
@@ -868,6 +874,72 @@ export default function App() {
                   scenario, not a promise.
                 </strong>
               </div>
+              {accountability &&
+                (accountability.per_horizon.length > 0 ||
+                  accountability.recent.length > 0) && (
+                <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #eceef0" }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>
+                    Live track record — forecasts actually logged, scored as reality
+                    arrives
+                  </div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 6 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: "#6b7280" }}>
+                        <th style={{ padding: "4px 8px" }}>Horizon</th>
+                        <th style={{ padding: "4px 8px" }}>Scored</th>
+                        <th style={{ padding: "4px 8px" }}>Realized MAPE</th>
+                        <th style={{ padding: "4px 8px" }}>Realized band coverage</th>
+                        <th style={{ padding: "4px 8px" }}>Pending</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {accountability.per_horizon.map((h) => (
+                        <tr key={h.horizon_days} style={{ borderTop: "1px solid #eceef0" }}>
+                          <td style={{ padding: "4px 8px", fontWeight: 700 }}>
+                            {HORIZON_LABEL[h.horizon_days] ?? `${h.horizon_days}d`}
+                          </td>
+                          <td style={{ padding: "4px 8px" }}>{h.n_scored}</td>
+                          <td style={{ padding: "4px 8px" }}>
+                            {h.n_scored > 0 ? `${h.mape_pct.toFixed(2)}%` : "—"}
+                          </td>
+                          <td style={{ padding: "4px 8px" }}>
+                            {h.n_scored > 0 ? `${h.band_coverage_pct.toFixed(1)}%` : "—"}
+                          </td>
+                          <td style={{ padding: "4px 8px" }}>{h.n_pending}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {accountability.recent.length > 0 && (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", color: "#6b7280" }}>
+                          <th style={{ padding: "4px 8px" }}>Made on</th>
+                          <th style={{ padding: "4px 8px" }}>For date</th>
+                          <th style={{ padding: "4px 8px" }}>Predicted</th>
+                          <th style={{ padding: "4px 8px" }}>Actual</th>
+                          <th style={{ padding: "4px 8px" }}>Error</th>
+                          <th style={{ padding: "4px 8px" }}>In band?</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {accountability.recent.slice(0, 6).map((p, i) => (
+                          <tr key={i} style={{ borderTop: "1px solid #f3f4f6" }}>
+                            <td style={{ padding: "4px 8px" }}>{p.origin_date}</td>
+                            <td style={{ padding: "4px 8px" }}>{p.target_date}</td>
+                            <td style={{ padding: "4px 8px" }}>{formatValue(p.predicted)}</td>
+                            <td style={{ padding: "4px 8px" }}>{formatValue(p.actual)}</td>
+                            <td style={{ padding: "4px 8px" }}>{p.err_pct.toFixed(2)}%</td>
+                            <td style={{ padding: "4px 8px", color: p.in_band ? "#166534" : "#b91c1c" }}>
+                              {p.in_band ? "yes" : "no"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

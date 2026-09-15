@@ -42,6 +42,40 @@ cities with a city selector, prev-day % change, and the last ~10 days of history
 - Retail rates include duty/GST/premium and vary by city — they intentionally differ from
   bullion prices; each response carries an attribution + disclaimer block.
 
+## Forecast accountability (the public track record)
+
+Every day (scheduler 22:10 UTC, and on startup) the system logs the actual forecasts it
+generated for all 5 horizons to `data/forecasts/forecast_log.parquet`. As real closes
+arrive, each logged prediction is scored automatically — realized MAPE, realized p10–p90
+band coverage, and pending counts — visible in the dashboard's trust card and at
+`GET /api/v1/accountability`. This measures the model on promises it actually made.
+
+## Telegram alerts
+
+Optional push notifications (no app install; works in family groups):
+
+1. Chat with [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token
+2. Message your bot once (press START), read `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   → `message.chat.id` (or use @userinfobot)
+3. Set in `.env` (compose env too): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS=123,456`,
+   `DASHBOARD_URL=https://your-public-url`
+
+What you get: a **daily digest** after the data refresh (spot close, INR bullion-equivalents,
+Pune retail quotes, 1m forecast median, drift warning, dashboard link) and **one-shot price
+alerts**:
+
+```bash
+curl -X POST "$API/api/v1/alerts/targets" -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"currency":"inr","karat":"22k","unit":"10gram","op":"<=","price":130000}'
+```
+
+Targets are checked after each data refresh; a triggered alert fires once (never spams).
+`GET /api/v1/alerts/targets` lists them; `DELETE /api/v1/alerts/targets/{id}` removes one.
+
+The dashboard also renders a **measured trust scoreboard** (per-horizon MAPE, direction
+accuracy vs naive, and p10–p90 band honesty) via `GET /api/v1/backtest/scoreboard`.
+
 ## Architecture
 
 ```

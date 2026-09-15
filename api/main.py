@@ -23,6 +23,14 @@ from fastapi.responses import JSONResponse
 
 from api import deps, scheduler as scheduler_mod
 from api.schemas import (
+    AccountabilityHorizon,
+    AccountabilityPoint,
+    AccountabilityResponse,
+    AlertCreatedResponse,
+    AlertDeletedResponse,
+    AlertTarget,
+    AlertTargetIn,
+    AlertTargetsResponse,
     BacktestModelResult,
     BacktestResponse,
     BacktestScoreEntry,
@@ -604,6 +612,69 @@ def health():
             ),
         },
     )
+
+
+@app.get("/api/v1/accountability", response_model=AccountabilityResponse, tags=["accountability"])
+def get_accountability(request: Request = None):  # type: ignore[assignment]
+    """Realized track record of logged forecasts (predicted vs actual)."""
+    _rate_limit_public(request, "accountability")
+    from forecasting.accountability import score_forecasts
+
+    try:
+        payload = score_forecasts(deps.get_history())
+    except FileNotFoundError:
+        return AccountabilityResponse(per_horizon=[], pending_counts={}, recent=[])
+    except Exception as exc:  # noqa: BLE001 - report must not break the API
+        raise HTTPException(status_code=502, detail=f"accountability scoring failed: {exc}") from exc
+    return AccountabilityResponse(
+        per_horizon=[
+            AccountabilityHorizon(**e) for e in payload["per_horizon"]
+        ],
+        pending_counts={str(k): v for k, v in payload["pending_counts"].items()},
+        recent=[AccountabilityPoint(**p) for p in payload["recent"]],
+    )
+
+
+def _targets_response() -> AlertTargetsResponse:
+    from alerts.telegram import list_targets
+
+    return AlertTargetsResponse(
+        targets=[AlertTarget(**t) for t in list_targets()],
+        alerts_enabled=settings.alerts_enabled,
+    )
+
+
+@app.get("/api/v1/alerts/targets", response_model=AlertTargetsResponse, tags=["alerts"])
+def get_alert_targets(request: Request = None):  # type: ignore[assignment]
+    _rate_limit_public(request, "alert_targets")
+    return _targets_response()
+
+
+@app.post("/api/v1/alerts/targets", response_model=AlertCreatedResponse, tags=["alerts"])
+def create_alert_target(
+    target: AlertTargetIn,
+    _key: None = Depends(_require_api_key),
+):
+    from alerts.telegram import add_target
+
+    created = add_target(
+        karat=target.karat, unit=target.unit, currency=target.currency,
+        op=target.op, price=target.price,
+    )
+    return AlertCreatedResponse(created=AlertTarget(**created))
+
+
+@app.delete("/api/v1/alerts/targets/{target_id}", response_model=AlertDeletedResponse, tags=["alerts"])
+def delete_alert_target(
+    target_id: str,
+    _key: None = Depends(_require_api_key),
+):
+    from alerts.telegram import remove_target
+
+    deleted = remove_target(target_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Unknown alert target: {target_id}")
+    return AlertDeletedResponse(deleted=True)
 
 
 @app.post("/api/v1/refresh", response_model=RefreshResponse, tags=["ops"])

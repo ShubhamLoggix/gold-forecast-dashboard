@@ -7,8 +7,10 @@ crashing the API; the API keeps serving last-known-good cached data.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import traceback
+from pathlib import Path
 
 from config import settings
 from logging_setup import setup_logging
@@ -101,6 +103,60 @@ def daily_refresh_job() -> None:
         deps.last_refresh_ok = False
         logger.error("Scheduled data refresh FAILED:\n%s", traceback.format_exc())
     _refresh_india_rates_job()
+    _accountability_and_alerts_job()
+
+
+def _accountability_and_alerts_job() -> None:
+    try:
+        import api.deps as deps
+        from forecasting.accountability import log_daily_forecasts
+        from ingestion.fetch_gold_prices import load_canonical
+
+        history = load_canonical()
+        log_daily_forecasts(deps.get_service(), history)
+    except Exception:  # noqa: BLE001
+        logger.warning("accountability logging FAILED:\n%s", traceback.format_exc())
+    _send_digest_and_check_alerts()
+
+
+def _latest_drift_report() -> dict | None:
+    try:
+        files = sorted((Path(settings.data_dir) / "backtests").glob("backtest_*.json"))
+        if not files:
+            return None
+        return json.loads(files[-1].read_text(encoding="utf-8")).get("model_drift")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _send_digest_and_check_alerts() -> None:
+    if not settings.alerts_enabled:
+        return
+    try:
+        import api.deps as deps
+        from alerts.telegram import daily_digest, evaluate_targets
+        from forecasting.timesfm_service import HORIZON_PRESETS
+        from ingestion.fetch_gold_prices import load_canonical
+        from ingestion.india_rates import get_city_rates
+        from ingestion.usdinr import latest_rate
+
+        history = load_canonical()
+        rate = latest_rate()
+        service = deps.get_service()
+        result = service.forecast(history, HORIZON_PRESETS["1m"], quantiles=False)
+        try:
+            retail = get_city_rates("pune")
+            pune = {"k24": retail["per_10g"]["24k"], "k22": retail["per_10g"]["22k"]}
+        except Exception:  # noqa: BLE001 - retail line is optional
+            pune = None
+        daily_digest(
+            history, rate["rate"], rate["rate_date"],
+            forecast_1m_median_usd=float(result.point[-1]),
+            pune_retail=pune, drift=_latest_drift_report(),
+        )
+        evaluate_targets(history, rate["rate"])
+    except Exception:  # noqa: BLE001
+        logger.warning("daily digest / alert check FAILED:\n%s", traceback.format_exc())
 
 
 def weekly_backtest_job() -> None:

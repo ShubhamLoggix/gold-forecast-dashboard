@@ -105,6 +105,13 @@ def _bootstrap() -> None:
             refresh_india_rates()
         except Exception as india_exc:  # noqa: BLE001 - retail view is auxiliary
             logger.warning("India retail rates seeding failed: %s", india_exc)
+        try:
+            from forecasting.accountability import log_daily_forecasts
+            from ingestion.fetch_gold_prices import load_canonical
+
+            log_daily_forecasts(get_service(), load_canonical())
+        except Exception as acc_exc:  # noqa: BLE001 - accountability is auxiliary
+            logger.warning("accountability logging failed: %s", acc_exc)
         get_service()
     except Exception as exc:  # noqa: BLE001 - bootstrap failures surface via /health
         _bootstrap_error = str(exc)

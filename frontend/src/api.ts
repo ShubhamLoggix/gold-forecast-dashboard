@@ -176,6 +176,34 @@ export interface BacktestScoreboard {
 export const fetchBacktestScoreboard = () =>
   request<BacktestScoreboard>(`/api/v1/backtest/scoreboard`);
 
+export interface AccountabilityPoint {
+  origin_date: string;
+  horizon_days: number;
+  target_date: string;
+  predicted: number;
+  actual: number;
+  err_pct: number;
+  in_band: boolean;
+}
+
+export interface AccountabilityHorizon {
+  horizon_days: number;
+  n_scored: number;
+  mape_pct: number;
+  band_coverage_pct: number;
+  n_pending: number;
+}
+
+export interface AccountabilityResponse {
+  per_horizon: AccountabilityHorizon[];
+  pending_counts: Record<string, number>;
+  recent: AccountabilityPoint[];
+  disclaimer: string;
+}
+
+export const fetchAccountability = () =>
+  request<AccountabilityResponse>(`/api/v1/accountability`);
+
 export const fetchHealth = () => request<HealthResponse>(`/api/v1/health`);
 
 export type IndiaSource = "bullion" | "retail";

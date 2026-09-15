@@ -84,6 +84,21 @@ class Settings:
     torch_compile: bool = field(
         default_factory=lambda: _env_bool("TIMESFM_TORCH_COMPILE", "0")
     )
+    telegram_bot_token: str = field(
+        default_factory=lambda: os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    )
+    telegram_chat_ids: list[str] = field(default_factory=lambda: [
+        c.strip()
+        for c in os.environ.get("TELEGRAM_CHAT_IDS", "").split(",")
+        if c.strip()
+    ])
+    dashboard_url: str = field(
+        default_factory=lambda: os.environ.get("DASHBOARD_URL", "").strip()
+    )
+
+    @property
+    def alerts_enabled(self) -> bool:
+        return bool(self.telegram_bot_token and self.telegram_chat_ids)
 
     @property
     def raw_dir(self) -> Path:

@@ -198,3 +198,75 @@ class RefreshResponse(BaseModel):
 
 class ErrorEnvelope(BaseModel):
     error: dict[str, str]
+
+
+# --------------------------------------------------------------------------- #
+# Alerts (Telegram)
+# --------------------------------------------------------------------------- #
+AlertOp = Literal["<=", ">="]
+AlertCurrency = Literal["usd", "inr"]
+
+
+class AlertTargetIn(BaseModel):
+    karat: Karat = "24k"
+    unit: Unit = "10gram"
+    currency: AlertCurrency = "inr"
+    op: AlertOp
+    price: float = Field(gt=0)
+
+
+class AlertTarget(BaseModel):
+    id: str
+    karat: Karat
+    unit: Unit
+    currency: AlertCurrency
+    op: AlertOp
+    price: float
+    created_at: dt.datetime
+    triggered_at: dt.datetime | None = None
+    triggered_value: float | None = None
+
+
+class AlertTargetsResponse(BaseModel):
+    targets: list[AlertTarget]
+    alerts_enabled: bool
+
+
+class AlertCreatedResponse(BaseModel):
+    created: AlertTarget
+
+
+class AlertDeletedResponse(BaseModel):
+    deleted: bool
+
+
+# --------------------------------------------------------------------------- #
+# Forecast accountability
+# --------------------------------------------------------------------------- #
+class AccountabilityPoint(BaseModel):
+    origin_date: dt.date
+    horizon_days: int
+    target_date: dt.date
+    predicted: float
+    actual: float
+    err_pct: float
+    in_band: bool
+
+
+class AccountabilityHorizon(BaseModel):
+    horizon_days: int
+    n_scored: int
+    mape_pct: float
+    band_coverage_pct: float
+    n_pending: int
+
+
+class AccountabilityResponse(BaseModel):
+    per_horizon: list[AccountabilityHorizon]
+    pending_counts: dict[str, int]
+    recent: list[AccountabilityPoint]
+    disclaimer: str = (
+        "Realized track record of forecasts this system actually logged — "
+        "scored automatically as actual closes become known. Empty until the "
+        "first logged forecast matures."
+    )
