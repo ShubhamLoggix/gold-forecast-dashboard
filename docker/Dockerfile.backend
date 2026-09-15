@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY config.py logging_setup.py conversion.py ./
 COPY ingestion ./ingestion
 COPY forecasting ./forecasting
+COPY alerts ./alerts
 COPY api ./api
 COPY scripts ./scripts
 
