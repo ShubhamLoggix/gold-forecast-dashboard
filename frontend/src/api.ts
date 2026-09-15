@@ -1,0 +1,120 @@
+// API client for the gold forecast backend.
+const BASE = import.meta.env.VITE_API_URL ?? ""; // "" => same-origin (vite proxy)
+
+export type Granularity = "day" | "week" | "month";
+export type Horizon = "1w" | "1m" | "3m" | "6m" | "1y";
+
+export interface OhlcPoint {
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number;
+  volume: number | null;
+}
+
+export interface HistoryResponse {
+  start: string;
+  end: string;
+  granularity: Granularity;
+  source: string;
+  points: OhlcPoint[];
+}
+
+export interface BaselineSeries {
+  name: string;
+  values: number[];
+}
+
+export interface ForecastResponse {
+  horizon: Horizon;
+  horizon_days: number;
+  model_version: string;
+  generated_at: string;
+  latency_ms: number;
+  history_last_date: string;
+  history_last_close: number;
+  dates: string[];
+  point: number[];
+  q10: number[];
+  q50: number[];
+  q90: number[];
+  quantiles: boolean;
+  baselines: BaselineSeries[];
+}
+
+export interface BacktestResponse {
+  generated_at: string;
+  model_version: string;
+  context_length: number;
+  results: Record<
+    string,
+    {
+      model: string;
+      summary: Record<string, number>;
+    }
+  >;
+}
+
+export interface HealthResponse {
+  status: string;
+  model_loaded: boolean;
+  model_version: string;
+  data_last_date: string | null;
+  data_freshness: string;
+  data_may_be_stale: boolean;
+}
+
+export class ApiError extends Error {
+  code: string;
+  requestId?: string;
+  constructor(code: string, message: string, requestId?: string) {
+    super(message);
+    this.code = code;
+    this.requestId = requestId;
+  }
+}
+
+async function request<T>(path: string): Promise<T> {
+  let resp: Response;
+  try {
+    resp = await fetch(`${BASE}${path}`, { headers: { Accept: "application/json" } });
+  } catch {
+    throw new ApiError("network_error", "API unreachable — is the backend running on :8000?");
+  }
+  if (!resp.ok) {
+    let code = "http_error";
+    let message = `Request failed with status ${resp.status}`;
+    try {
+      const body = await resp.json();
+      if (body?.error) {
+        code = body.error.code ?? code;
+        message = body.error.message ?? message;
+      }
+    } catch {
+      /* keep defaults */
+    }
+    throw new ApiError(code, message, resp.headers.get("X-Request-ID") ?? undefined);
+  }
+  return resp.json() as Promise<T>;
+}
+
+export const fetchHistory = (params: {
+  start?: string;
+  end?: string;
+  granularity: Granularity;
+}) => {
+  const q = new URLSearchParams();
+  if (params.start) q.set("start", params.start);
+  if (params.end) q.set("end", params.end);
+  q.set("granularity", params.granularity);
+  return request<HistoryResponse>(`/api/v1/history?${q.toString()}`);
+};
+
+export const fetchForecast = (horizon: Horizon, quantiles = true) =>
+  request<ForecastResponse>(`/api/v1/forecast?horizon=${horizon}&quantiles=${quantiles}`);
+
+export const fetchBacktest = () =>
+  request<BacktestResponse>(`/api/v1/backtest/latest`);
+
+export const fetchHealth = () => request<HealthResponse>(`/api/v1/health`);

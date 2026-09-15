@@ -37,9 +37,9 @@ def fake_source(monkeypatch):
     return calls, start_day, end_day
 
 
-def test_fetch_history_schema(fake_source):
+def test_fetch_history_schema(fake_source, tmp_data_dir):
     calls, start, end = fake_source
-    df = fetch_history(start, end, source="yfinance")
+    df = fetch_history(start, end, source="yfinance", data_dir=tmp_data_dir)
     assert list(df.columns) == [
         "date", "open", "high", "low", "close", "volume", "source",
     ]

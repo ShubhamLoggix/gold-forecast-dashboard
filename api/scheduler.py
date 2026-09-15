@@ -1,0 +1,100 @@
+"""APScheduler wiring: daily data refresh after market close, weekly backtest.
+
+All jobs are wrapped so a failure logs and flips the health flag instead of
+crashing the API; the API keeps serving last-known-good cached data.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import traceback
+
+from config import settings
+from logging_setup import setup_logging
+
+setup_logging(settings.log_level, json_logs=True)
+logger = logging.getLogger("gold_forecast.scheduler")
+
+_scheduler = None
+
+
+def start() -> None:
+    global _scheduler
+    if _scheduler is not None:
+        return
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        logger.warning("APScheduler not installed; scheduling disabled.")
+        return
+
+    _scheduler = AsyncIOScheduler(timezone="UTC")
+    _scheduler.add_job(
+        daily_refresh_job,
+        CronTrigger(hour=22, minute=10, day_of_week="mon-fri"),
+        id="daily_data_refresh",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        weekly_backtest_job,
+        CronTrigger(day_of_week="mon", hour=6, minute=0),
+        id="weekly_backtest",
+        replace_existing=True,
+    )
+    _scheduler.start()
+    logger.info("Scheduler started (daily refresh 22:10 UTC, weekly backtest Mon 00:00 UTC).")
+
+
+def stop() -> None:
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
+        _scheduler = None
+        logger.info("Scheduler stopped.")
+
+
+def run_now() -> None:
+    if _scheduler is not None:
+        _scheduler.get_job("daily_data_refresh").modify(next_run_time=dt.datetime.now(dt.timezone.utc))
+
+
+def daily_refresh_job() -> None:
+    logger.info("Scheduled data refresh starting...")
+    try:
+        import api.deps as deps
+
+        from ingestion.fetch_gold_prices import update_canonical
+
+        df = update_canonical(
+            dt.date.fromisoformat(settings.history_start), dt.date.today(),
+            force_refresh=False,
+        )
+        deps.invalidate_response_cache()
+        deps.last_refresh_ok = True
+        logger.info("Scheduled data refresh done (rows=%d).", len(df))
+    except Exception:  # noqa: BLE001 - scheduled jobs must not crash the API
+        deps.last_refresh_ok = False
+        logger.error("Scheduled data refresh FAILED:\n%s", traceback.format_exc())
+
+
+def weekly_backtest_job() -> None:
+    logger.info("Scheduled weekly backtest starting...")
+    try:
+        from api import deps
+
+        from forecasting.timesfm_service import GoldForecastService
+        from ingestion.fetch_gold_prices import load_canonical
+
+        history = load_canonical()
+        service = GoldForecastService(
+            model_version=settings.model_version, context_length=settings.context_length
+        )
+        service.load_model()
+        results = service.backtest(history, horizon_days=30, step_days=7, max_folds=26)
+        service.persist_backtest(results)
+        deps.invalidate_response_cache()
+        logger.info("Scheduled weekly backtest done.")
+    except Exception:  # noqa: BLE001
+        logger.error("Scheduled weekly backtest FAILED:\n%s", traceback.format_exc())
