@@ -206,9 +206,11 @@ def daily_digest(
     if retail:
         lines.append(f"Rate date: {retail.get('date')}")
         lines.append("")
-        per_10g = retail.get("per_10g") or {}
-        pct = retail.get("pct_change") or {}
         per_gram = retail.get("per_gram") or {}
+        per_10g = retail.get("per_10g") or {
+            k: float(v) * 10 for k, v in per_gram.items()
+        }
+        pct = retail.get("pct_change") or {}
         lines.append(
             f"24K/10g: Rs {_inr(per_10g.get('24k', 0))}  ({_fmt_pct(pct.get('24k'))} vs prev day)"
         )

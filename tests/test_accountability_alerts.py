@@ -120,7 +120,6 @@ def test_daily_digest_template(isolated_settings, monkeypatch):
         "per_gram": {"24k": 15317.0, "22k": 14041.0, "18k": 11488.0},
         "pct_change": {"24k": -0.597, "22k": -0.594, "18k": -0.597},
     }
-    retail["per_10g"] = {k: v * 10 for k, v in retail["per_gram"].items()}
     ok = tg.daily_digest(
         retail=retail,
         usd_inr_rate=95.9325,
