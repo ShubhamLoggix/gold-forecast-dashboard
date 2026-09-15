@@ -23,9 +23,11 @@ _service_lock = threading.Lock()
 _response_cache: dict[tuple, object] = {}
 _response_cache_lock = threading.Lock()
 
-# Health bookkeeping for the scheduler.
+# Health bookkeeping for the scheduler + startup bootstrap.
 last_refresh_ok = True
 last_refresh_attempt: float | None = None
+_bootstrap_thread: threading.Thread | None = None
+_bootstrap_error: str | None = None
 
 
 def get_history() -> pd.DataFrame:
@@ -45,6 +47,52 @@ def get_service() -> GoldForecastService:
                 service.load_model()
                 _service = service
     return _service
+
+
+def service_is_loaded() -> bool:
+    """Report model state WITHOUT triggering a load (safe for /health)."""
+    return _service is not None and _service.is_loaded
+
+
+def bootstrap_if_needed() -> threading.Thread | None:
+    """Start a background thread that seeds data + loads the model once.
+
+    Keeps the HTTP server responsive while the (potentially minutes-long)
+    first-time model download/ingestion happens; /health reports progress.
+    """
+    global _bootstrap_thread
+    with _service_lock:
+        if _bootstrap_thread is not None:
+            return None
+        _bootstrap_thread = threading.Thread(
+            target=_bootstrap, name="bootstrap", daemon=True
+        )
+        _bootstrap_thread.start()
+        return _bootstrap_thread
+
+
+def _bootstrap() -> None:
+    global _bootstrap_error
+    try:
+        import datetime as dt
+
+        from ingestion.fetch_gold_prices import load_canonical, update_canonical
+
+        try:
+            load_canonical()
+        except FileNotFoundError:
+            logger.info("No canonical data; seeding from yfinance...")
+            update_canonical(
+                dt.date.fromisoformat(settings.history_start), dt.date.today()
+            )
+        get_service()
+    except Exception as exc:  # noqa: BLE001 - bootstrap failures surface via /health
+        _bootstrap_error = str(exc)
+        logger.exception("Startup bootstrap failed: %s", exc)
+
+
+def bootstrap_error() -> str | None:
+    return _bootstrap_error
 
 
 def cache_get(key: tuple) -> object | None:

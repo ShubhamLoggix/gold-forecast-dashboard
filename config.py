@@ -70,6 +70,13 @@ class Settings:
         default_factory=lambda: os.environ.get("HISTORY_START", "2016-01-01")
     )
     api_key: str = field(default_factory=lambda: os.environ.get("API_KEY", ""))
+    cors_origins: list[str] = field(default_factory=lambda: [
+        o.strip()
+        for o in os.environ.get(
+            "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+        ).split(",")
+        if o.strip()
+    ])
     log_level: str = field(default_factory=lambda: os.environ.get("LOG_LEVEL", "INFO"))
     enable_scheduler: bool = field(
         default_factory=lambda: _env_bool("ENABLE_SCHEDULER", "1")

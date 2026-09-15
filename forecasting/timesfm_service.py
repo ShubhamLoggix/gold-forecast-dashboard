@@ -388,6 +388,15 @@ class GoldForecastService:
             ),
             "sma-20": _summarize("sma-20", "-", horizon_days, step_days, sma_folds),
         }
+        drift = evaluate_drift(result)
+        if drift and drift["underperforming"]:
+            logger.warning(
+                "MODEL UNDERPERFORMING BASELINE: TimesFM directional accuracy is "
+                "%.2f pp below the naive carry-forward baseline (%s vs %s).",
+                -drift["delta_pp"],
+                drift["timesfm_dir_acc_pct"],
+                drift["naive_dir_acc_pct"],
+            )
         logger.info(
             "backtest done: folds=%d horizon=%d elapsed=%.1fs | %s",
             len(tm_folds),
@@ -411,11 +420,47 @@ class GoldForecastService:
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "model_version": self.model_version,
             "context_length": self.context_length,
+            "model_drift": evaluate_drift(results),
             "results": {name: res.to_dict() for name, res in results.items()},
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         logger.info("Backtest report written to %s", path)
         return path
+
+
+MODEL_DRIFT_THRESHOLD_PP = -5.0  # TimesFM < naive by more than 5 percentage points
+
+
+def evaluate_drift(results: dict[str, "BacktestResult"]) -> dict | None:
+    """Model-drift watchdog: TimesFM directional accuracy vs naive baseline.
+
+    Returns None when either summary is missing; otherwise
+    {"delta_pp", "timesfm_dir_acc_pct", "naive_dir_acc_pct", "underperforming"}
+    where underperforming is True when TimesFM falls more than 5 pp below the
+    naive carry-forward baseline.
+    """
+    tm = next(
+        (r for name, r in results.items() if name.startswith("timesfm-")), None
+    )
+    nv = results.get("naive-last-value")
+    if (
+        tm is None
+        or nv is None
+        or not tm.summary
+        or not nv.summary
+        or tm.summary.get("directional_accuracy_pct") is None
+        or nv.summary.get("directional_accuracy_pct") is None
+    ):
+        return None
+    tm_acc = float(tm.summary["directional_accuracy_pct"])
+    nv_acc = float(nv.summary["directional_accuracy_pct"])
+    delta = tm_acc - nv_acc
+    return {
+        "delta_pp": round(delta, 2),
+        "timesfm_dir_acc_pct": round(tm_acc, 2),
+        "naive_dir_acc_pct": round(nv_acc, 2),
+        "underperforming": bool(delta < MODEL_DRIFT_THRESHOLD_PP),
+    }
 
 
 def _fold_metrics(

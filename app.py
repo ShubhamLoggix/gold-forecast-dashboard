@@ -307,6 +307,15 @@ st.caption(
 
 # ----------------------------- model info --------------------------------- #
 with st.expander("Model info"):
+    drift = (backtest or {}).get("model_drift")
+    if drift and drift.get("underperforming"):
+        st.warning(
+            f"**MODEL UNDERPERFORMING BASELINE** — TimesFM directional accuracy is "
+            f"{abs(drift['delta_pp']):.1f} pp *below* the naive carry-forward baseline "
+            f"({drift['timesfm_dir_acc_pct']:.1f}% vs {drift['naive_dir_acc_pct']:.1f}%). "
+            f"Treat all forecasts with extra skepticism.",
+            icon="🚨",
+        )
     last_refresh = dt.datetime.fromtimestamp(
         (settings.processed_dir / "gold_prices_daily.parquet").stat().st_mtime
     )
@@ -314,6 +323,15 @@ with st.expander("Model info"):
         "Apache-2.0 (commercial-safe)"
         if settings.model_version == "2.5"
         else "timesfm-non-commercial-license-v1.0 (NON-COMMERCIAL)"
+    )
+    drift_note = (
+        (
+            f"- **Drift watchdog:** TimesFM vs naive baseline delta = "
+            f"{drift['delta_pp']:+.1f} pp (warning threshold: -5 pp). Flag active: "
+            f"{'YES — see warning above' if drift.get('underperforming') else 'no'}\n"
+        )
+        if drift
+        else "- **Drift watchdog:** no backtest report yet — run one from the sidebar.\n"
     )
     st.markdown(
         f"""
@@ -325,7 +343,7 @@ with st.expander("Model info"):
   the exact training cutoff is not documented precisely — the model was *not* trained on
   up-to-the-minute gold data)
 - **Last data refresh:** {last_refresh:%Y-%m-%d %H:%M} ({len(history_full)} trading days, source: COMEX GC=F via yfinance)
-- **Known limitations:** zero-shot foundation models on financial series perform close to
+{drift_note}- **Known limitations:** zero-shot foundation models on financial series perform close to
   chance level (~50% directional accuracy); quantile bands reflect model-internal
   uncertainty, not calibrated risk. Improvement requires financial-domain fine-tuning,
   which this project does not include by default.

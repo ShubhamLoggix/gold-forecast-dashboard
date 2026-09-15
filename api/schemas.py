@@ -83,6 +83,8 @@ class HealthResponse(BaseModel):
     data_freshness: str
     data_may_be_stale: bool
     last_refresh_ok: bool
+    model_underperforming_baseline: bool = False
+    bootstrap_error: str | None = None
     source_status: dict[str, str]
 
 

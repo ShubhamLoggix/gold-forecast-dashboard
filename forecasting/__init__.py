@@ -13,6 +13,7 @@ from forecasting.timesfm_service import (
     ForecastResult,
     GoldForecastService,
     TimesFMNotLoaded,
+    evaluate_drift,
 )
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "GoldForecastService",
     "TimesFMNotLoaded",
     "directional_accuracy",
+    "evaluate_drift",
     "mae",
     "mape",
     "naive_last_value",

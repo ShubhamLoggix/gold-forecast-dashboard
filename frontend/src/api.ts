@@ -47,6 +47,12 @@ export interface BacktestResponse {
   generated_at: string;
   model_version: string;
   context_length: number;
+  model_drift?: {
+    delta_pp: number;
+    timesfm_dir_acc_pct: number;
+    naive_dir_acc_pct: number;
+    underperforming: boolean;
+  };
   results: Record<
     string,
     {

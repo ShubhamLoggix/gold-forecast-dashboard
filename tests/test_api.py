@@ -128,7 +128,8 @@ def test_backtest_latest_contract(client, tmp_path):
     assert tm["n_folds"] == 5
 
 
-def test_health_endpoint(client):
+def test_health_endpoint(client, monkeypatch):
+    monkeypatch.setattr(deps, "service_is_loaded", lambda: True)
     resp = client.get("/api/v1/health")
     assert resp.status_code == 200
     body = resp.json()

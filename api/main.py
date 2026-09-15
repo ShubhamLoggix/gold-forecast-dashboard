@@ -7,6 +7,8 @@ Docs: http://localhost:8000/docs
 from __future__ import annotations
 
 import datetime as dt
+import hmac
+import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -41,10 +43,15 @@ setup_logging(settings.log_level, json_logs=True)
 logger = logging.getLogger("gold_forecast.api")
 
 refresh_rate_limiter = deps.RateLimiter(max_calls=1, period_seconds=60.0)
+# Public read endpoints: generous for a dashboard, strict enough to stop abuse.
+public_rate_limiter = deps.RateLimiter(max_calls=60, period_seconds=60.0)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Seed data + warm the model in the background so the HTTP server (and the
+    # healthcheck) stay responsive while the first-time download happens.
+    deps.bootstrap_if_needed()
     if settings.enable_scheduler:
         scheduler_mod.start()
     try:
@@ -66,8 +73,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=settings.cors_origins or ["http://localhost:5173"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -75,10 +82,17 @@ app.add_middleware(
 # --------------------------------------------------------------------------- #
 # Request ID + error envelope middleware
 # --------------------------------------------------------------------------- #
+MAX_BODY_BYTES = 1024 * 1024  # 1 MiB — endpoints take no large payloads
+
+
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
     request.state.request_id = request_id
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_BODY_BYTES:
+        return _error_response(request, 413, "payload_too_large",
+                               "Request body exceeds the 1 MiB limit.")
     response: Response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response
@@ -114,8 +128,23 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 # Endpoints
 # --------------------------------------------------------------------------- #
 def _require_api_key(x_api_key: str | None = Header(default=None)) -> None:
-    if not settings.api_key or not x_api_key or x_api_key != settings.api_key:
+    # Constant-time comparison to prevent timing side channels.
+    if (
+        not settings.api_key
+        or not x_api_key
+        or not hmac.compare_digest(x_api_key.encode(), settings.api_key.encode())
+    ):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+
+def _rate_limit_public(request: Request, bucket: str) -> None:
+    """Per-client-IP token bucket on public GET endpoints."""
+    client = request.client.host if request.client else "unknown"
+    if not public_rate_limiter.allow(f"{client}:{bucket}"):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded for {bucket}. Slow down and retry shortly.",
+        )
 
 
 def _history_response(
@@ -155,6 +184,7 @@ def get_history(
     granularity: str = Query(default="day", pattern="^(day|week|month)$"),
     request: Request = None,  # type: ignore[assignment]
 ):
+    _rate_limit_public(request, "history")
     key = ("history", start, end, granularity)
     cached = deps.cache_get(key)
     if cached is None:
@@ -197,7 +227,9 @@ def _forecast_response(horizon: str, quantiles: bool) -> ForecastResponse:
 def get_forecast(
     horizon: str = Query(default="1m", pattern="^(1w|1m|3m|6m|1y)$"),
     quantiles: bool = Query(default=True),
+    request: Request = None,  # type: ignore[assignment]
 ):
+    _rate_limit_public(request, "forecast")
     key = ("forecast", horizon, quantiles, settings.model_version)
     cached = deps.cache_get(key)
     if cached is None:
@@ -207,7 +239,8 @@ def get_forecast(
 
 
 @app.get("/api/v1/backtest/latest", response_model=BacktestResponse, tags=["backtest"])
-def get_latest_backtest():
+def get_latest_backtest(request: Request = None):  # type: ignore[assignment]
+    _rate_limit_public(request, "backtest")
     out_dir = Path(settings.data_dir) / "backtests"
     files = sorted(out_dir.glob("backtest_*.json"))
     if not files:
@@ -215,8 +248,6 @@ def get_latest_backtest():
             status_code=404,
             detail="No backtest report found. Run scripts/run_backtest.py first.",
         )
-    import json
-
     payload = json.loads(files[-1].read_text(encoding="utf-8"))
     return BacktestResponse(
         generated_at=payload["generated_at"],
@@ -236,23 +267,46 @@ def get_latest_backtest():
     )
 
 
+def _latest_drift() -> dict | None:
+    """Model-drift watchdog block from the most recent backtest report."""
+    files = sorted((Path(settings.data_dir) / "backtests").glob("backtest_*.json"))
+    if not files:
+        return None
+    try:
+        payload = json.loads(files[-1].read_text(encoding="utf-8"))
+        return payload.get("model_drift")
+    except Exception:  # noqa: BLE001 - health must not crash on a bad report
+        return None
+
+
 @app.get("/api/v1/health", response_model=HealthResponse, tags=["ops"])
 def health():
     last_date, freshness = deps.data_freshness()
-    try:
-        model_loaded = deps.get_service().is_loaded
-    except Exception:  # noqa: BLE001 - health must not crash on model failure
-        model_loaded = False
+    # NOTE: deliberately does NOT call get_service() — a health probe must not
+    # trigger a multi-minute model download/load.
+    model_loaded = deps.service_is_loaded()
     stale = freshness == "stale"
+    drift = _latest_drift()
+    underperforming = bool(drift and drift.get("underperforming"))
+    bootstrap_err = deps.bootstrap_error()
+    degraded = stale or not model_loaded or bool(bootstrap_err) or underperforming
     return HealthResponse(
-        status="degraded" if stale or not model_loaded else "ok",
+        status="degraded" if degraded else "ok",
         model_loaded=model_loaded,
         model_version=settings.model_version,
         data_last_date=last_date,
         data_freshness=freshness,
         data_may_be_stale=stale,
         last_refresh_ok=deps.last_refresh_ok,
-        source_status={"canonical": freshness, "ingest_backends": "yfinance,lbma,metals_api"},
+        model_underperforming_baseline=underperforming,
+        bootstrap_error=bootstrap_err,
+        source_status={
+            "canonical": freshness,
+            "ingest_backends": "yfinance,lbma,metals_api",
+            "drift_delta_pp": (
+                str(drift.get("delta_pp")) if drift else "no-backtest-report"
+            ),
+        },
     )
 
 

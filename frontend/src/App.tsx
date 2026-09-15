@@ -369,6 +369,16 @@ export default function App() {
 
           <details className="model-info">
             <summary>Model info</summary>
+            {backtest?.model_drift?.underperforming && (
+              <div className="disclaimer" style={{ marginTop: 10 }}>
+                <strong>MODEL UNDERPERFORMING BASELINE</strong> — TimesFM directional
+                accuracy is {Math.abs(backtest.model_drift.delta_pp).toFixed(1)} pp{" "}
+                <em>below</em> the naive carry-forward baseline (
+                {backtest.model_drift.timesfm_dir_acc_pct.toFixed(1)}% vs{" "}
+                {backtest.model_drift.naive_dir_acc_pct.toFixed(1)}%). Treat all
+                forecasts with extra skepticism.
+              </div>
+            )}
             <ul>
               <li>
                 <strong>Model:</strong> TimesFM {forecast?.model_version} (
