@@ -162,9 +162,10 @@ def _send_digest_and_check_alerts() -> None:
         ratio = None
         pct = None
         if retail_data and bullion_22k_10g_today > 0:
-            ratio = retail_data["per_10g"]["22k"] / bullion_22k_10g_today
+            retail_22k_10g = float(retail_data["per_gram"]["22k"]) * 10
+            ratio = retail_22k_10g / bullion_22k_10g_today
             est_22k_10g *= ratio
-            pct = (est_22k_10g / retail_data["per_10g"]["22k"] - 1) * 100
+            pct = (est_22k_10g / retail_22k_10g - 1) * 100
         forecast_info = {
             "horizon": "1m",
             "median_inr_22k_10g": est_22k_10g,
