@@ -114,9 +114,11 @@ def test_backtest_runs_against_baselines_and_persists(tmp_data_dir):
     for res in results.values():
         assert len(res.folds) == 5
         assert set(res.summary) == {
-            "mape_pct", "rmse", "mae", "directional_accuracy_pct", "n_folds",
+            "mape_pct", "rmse", "mae", "directional_accuracy_pct",
+            "band_coverage_pct", "n_folds",
         }
         assert 0.0 <= res.summary["directional_accuracy_pct"] <= 100.0
+        assert 0.0 <= res.summary["band_coverage_pct"] <= 100.0
     path = service.persist_backtest(results, data_dir=tmp_data_dir)
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["model_version"] == "2.5"

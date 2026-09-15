@@ -119,6 +119,15 @@ def weekly_backtest_job() -> None:
         results = service.backtest(history, horizon_days=30, step_days=7, max_folds=26)
         service.persist_backtest(results)
         deps.invalidate_response_cache()
-        logger.info("Scheduled weekly backtest done.")
+        logger.info("Scheduled weekly backtest done (30d).")
+        # Long-horizon trust score (overlapping quarterly folds).
+        try:
+            results_1y = service.backtest(
+                history, horizon_days=252, step_days=63, max_folds=8
+            )
+            service.persist_backtest(results_1y, suffix="-1y")
+            logger.info("Scheduled weekly backtest done (1y).")
+        except Exception:  # noqa: BLE001 - 1y score is supplementary
+            logger.warning("1y backtest FAILED:\n%s", traceback.format_exc())
     except Exception:  # noqa: BLE001
         logger.error("Scheduled weekly backtest FAILED:\n%s", traceback.format_exc())

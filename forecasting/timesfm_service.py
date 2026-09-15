@@ -86,6 +86,7 @@ class BacktestFold:
     rmse: float
     mae: float
     directional_accuracy: float
+    band_coverage: float = 0.0
 
 
 @dataclasses.dataclass
@@ -410,12 +411,13 @@ class GoldForecastService:
         self,
         results: dict[str, BacktestResult],
         data_dir: Path | None = None,
+        suffix: str = "",
     ) -> Path:
-        """Save backtest results to data/backtests/backtest_<date>.json."""
+        """Save backtest results to data/backtests/backtest_<date>[<suffix>].json."""
         data_dir = Path(data_dir or settings.data_dir)
         out_dir = data_dir / "backtests"
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"backtest_{dt.date.today().isoformat()}.json"
+        path = out_dir / f"backtest_{dt.date.today().isoformat()}{suffix}.json"
         payload = {
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "model_version": self.model_version,
@@ -473,7 +475,9 @@ def _fold_metrics(
     q10: np.ndarray,
     q90: np.ndarray,
 ) -> BacktestFold:
-    del q10, q90  # error + directional metrics only
+    # Band coverage: fraction of actual outcomes that landed inside the
+    # model's own p10–p90 band (≈80% when the band is well calibrated).
+    coverage = float(np.mean((actual >= q10) & (actual <= q90))) if len(actual) else 0.0
     return BacktestFold(
         origin_date=str(pd.Timestamp(dates.iloc[origin - 1]).date()),
         horizon_days=horizon_days,
@@ -483,6 +487,7 @@ def _fold_metrics(
         directional_accuracy=directional_accuracy(
             np.array([prev_close]), actual, predicted
         ),
+        band_coverage=coverage,
     )
 
 
@@ -497,6 +502,9 @@ def _summarize(
         "mae": float(np.mean([f.mae for f in folds])),
         "directional_accuracy_pct": float(
             np.mean([f.directional_accuracy for f in folds]) * 100
+        ),
+        "band_coverage_pct": float(
+            np.mean([f.band_coverage for f in folds]) * 100
         ),
         "n_folds": len(folds),
     }

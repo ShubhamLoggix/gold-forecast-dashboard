@@ -124,6 +124,7 @@ def test_india_api_endpoints(stub_groww, monkeypatch, tmp_path):
     monkeypatch.setattr(deps, "get_history", lambda: frame)
     monkeypatch.setattr(deps, "get_service", lambda: service)
     monkeypatch.setattr(settings, "api_key", "test-key")
+    monkeypatch.setattr(deps, "bootstrap_if_needed", lambda: None)
     deps.invalidate_response_cache()
     with TestClient(app) as client:
         cities = client.get("/api/v1/india/cities")
@@ -172,6 +173,7 @@ def test_india_forecast_endpoint(stub_groww, monkeypatch, tmp_path):
     monkeypatch.setattr(deps, "get_history", lambda: frame)
     monkeypatch.setattr(deps, "get_service", lambda: service)
     monkeypatch.setattr(settings, "api_key", "test-key")
+    monkeypatch.setattr(deps, "bootstrap_if_needed", lambda: None)
     deps.invalidate_response_cache()
     with TestClient(app) as client:
         resp = client.get(

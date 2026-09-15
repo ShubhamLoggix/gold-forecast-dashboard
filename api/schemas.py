@@ -140,6 +140,7 @@ class BacktestFoldOut(BaseModel):
     rmse: float
     mae: float
     directional_accuracy: float
+    band_coverage: float | None = None
 
 
 class BacktestModelResult(BaseModel):
@@ -156,6 +157,23 @@ class BacktestResponse(BaseModel):
     model_version: str
     context_length: int
     results: dict[str, BacktestModelResult]
+
+
+class BacktestScoreEntry(BaseModel):
+    horizon_days: int
+    generated_at: dt.datetime
+    model_version: str
+    mape_pct: float
+    directional_accuracy_pct: float
+    naive_directional_accuracy_pct: float | None = None
+    skill_vs_naive_pp: float | None = None
+    band_coverage_pct: float | None = None
+    n_folds: int
+    underperforming_naive: bool
+
+
+class BacktestScoreboard(BaseModel):
+    entries: list[BacktestScoreEntry]
 
 
 class HealthResponse(BaseModel):

@@ -25,6 +25,8 @@ from api import deps, scheduler as scheduler_mod
 from api.schemas import (
     BacktestModelResult,
     BacktestResponse,
+    BacktestScoreEntry,
+    BacktestScoreboard,
     BaselineSeries,
     ForecastResponse,
     HealthResponse,
@@ -502,6 +504,63 @@ def get_latest_backtest(request: Request = None):  # type: ignore[assignment]
             for name, res in payload["results"].items()
         },
     )
+
+
+@app.get("/api/v1/backtest/scoreboard", response_model=BacktestScoreboard, tags=["backtest"])
+def backtest_scoreboard(request: Request = None):  # type: ignore[assignment]
+    """Per-horizon measured accuracy across all persisted backtest reports.
+
+    This is the "how much can you trust the model" data: each entry is the
+    average over real out-of-sample walk-forward folds.
+    """
+    _rate_limit_public(request, "scoreboard")
+    out_dir = Path(settings.data_dir) / "backtests"
+    files = sorted(out_dir.glob("backtest_*.json"), reverse=True)
+    entries: list[BacktestScoreEntry] = []
+    seen: set[int] = set()
+    for path in files:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - skip unreadable reports
+            continue
+        results = payload.get("results") or {}
+        tm = next((r for n, r in results.items() if n.startswith("timesfm-")), None)
+        nv = results.get("naive-last-value")
+        if not tm or not tm.get("summary"):
+            continue
+        summary = tm["summary"]
+        horizon = int(summary.get("horizon_days") or tm.get("horizon_days") or 0)
+        if not horizon or horizon in seen:
+            continue
+        seen.add(horizon)
+        dir_acc = float(summary.get("directional_accuracy_pct", 0.0))
+        nv_acc = None
+        if nv and nv.get("summary", {}).get("directional_accuracy_pct") is not None:
+            nv_acc = float(nv["summary"]["directional_accuracy_pct"])
+        entries.append(
+            BacktestScoreEntry(
+                horizon_days=horizon,
+                generated_at=dt.datetime.fromisoformat(payload["generated_at"]),
+                model_version=str(payload.get("model_version")),
+                mape_pct=float(summary.get("mape_pct", 0.0)),
+                directional_accuracy_pct=dir_acc,
+                naive_directional_accuracy_pct=nv_acc,
+                skill_vs_naive_pp=(
+                    round(dir_acc - nv_acc, 2) if nv_acc is not None else None
+                ),
+                band_coverage_pct=(
+                    float(summary["band_coverage_pct"])
+                    if summary.get("band_coverage_pct") is not None
+                    else None
+                ),
+                n_folds=int(summary.get("n_folds", 0)),
+                underperforming_naive=bool(
+                    nv_acc is not None and dir_acc < nv_acc
+                ),
+            )
+        )
+    entries.sort(key=lambda e: e.horizon_days)
+    return BacktestScoreboard(entries=entries)
 
 
 def _latest_drift() -> dict | None:

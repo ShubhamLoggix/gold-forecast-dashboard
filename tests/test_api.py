@@ -44,6 +44,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(deps, "get_history", lambda: frame)
     monkeypatch.setattr(deps, "get_service", lambda: service)
     monkeypatch.setattr(settings, "api_key", "test-key")
+    monkeypatch.setattr(deps, "bootstrap_if_needed", lambda: None)
     deps.invalidate_response_cache()
     with TestClient(app) as c:
         yield c
@@ -126,6 +127,34 @@ def test_backtest_latest_contract(client, tmp_path):
     assert set(body["results"]) == {"timesfm-2.5", "naive-last-value", "sma-20"}
     tm = body["results"]["timesfm-2.5"]["summary"]
     assert tm["n_folds"] == 5
+    assert "band_coverage_pct" in tm
+    assert 0.0 <= tm["band_coverage_pct"] <= 100.0
+    assert "band_coverage" in body["results"]["timesfm-2.5"]["folds"][0]
+
+
+def test_backtest_scoreboard(client, tmp_path):
+    resp = client.get("/api/v1/backtest/scoreboard")
+    assert resp.status_code == 200
+    assert resp.json()["entries"] == []
+
+    from forecasting.timesfm_service import GoldForecastService
+
+    service = main_mod.GoldForecastService(model_version="2.5")
+    service._model = StubModel()
+    service._predict_fn = service._predict_2p5
+    results = service.backtest(
+        make_history(n=250), horizon_days=10, step_days=20, max_folds=5
+    )
+    service.persist_backtest(results, data_dir=tmp_path)
+    resp = client.get("/api/v1/backtest/scoreboard")
+    assert resp.status_code == 200
+    entries = resp.json()["entries"]
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["horizon_days"] == 10
+    assert e["mape_pct"] >= 0
+    assert "band_coverage_pct" in e
+    assert e["underperforming_naive"] in {True, False}
 
 
 def test_health_endpoint(client, monkeypatch):

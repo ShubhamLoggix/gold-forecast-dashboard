@@ -14,6 +14,7 @@ import {
 import {
   ApiError,
   fetchBacktest,
+  fetchBacktestScoreboard,
   fetchForecast,
   fetchHealth,
   fetchHistory,
@@ -21,6 +22,7 @@ import {
   fetchIndiaForecast,
   fetchIndiaRates,
   type BacktestResponse,
+  type BacktestScoreboard,
   type Currency,
   type ForecastResponse,
   type Granularity,
@@ -58,6 +60,21 @@ const INR_CAPTION =
 const RETAIL_FALLBACK_CITIES: IndiaCity[] = [
   { slug: "pune", name: "Pune", type: "city", state_name: "Maharashtra" },
 ];
+
+const HORIZON_DAYS: Record<Horizon, number> = {
+  "1w": 5,
+  "1m": 21,
+  "3m": 63,
+  "6m": 126,
+  "1y": 252,
+};
+const HORIZON_LABEL: Record<number, string> = {
+  5: "1w",
+  21: "1m",
+  63: "3m",
+  126: "6m",
+  252: "1y",
+};
 
 interface Row {
   date: string;
@@ -185,6 +202,7 @@ export default function App() {
   const [indiaForecast, setIndiaForecast] = useState<IndiaForecastResponse | null>(null);
   const [indiaError, setIndiaError] = useState<ApiError | null>(null);
   const [indiaLoading, setIndiaLoading] = useState(false);
+  const [scoreboard, setScoreboard] = useState<BacktestScoreboard | null>(null);
 
   const [history, setHistory] = useState<HistoryResponse | null>(null);
   const [forecast, setForecast] = useState<ForecastResponse | null>(null);
@@ -275,6 +293,12 @@ export default function App() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    fetchBacktestScoreboard()
+      .then(setScoreboard)
+      .catch(() => setScoreboard(null));
+  }, []);
 
   const rows = useMemo(
     () => (history && forecast ? buildRows(history, forecast) : []),
@@ -772,6 +796,79 @@ export default function App() {
               baselines. If TimesFM does not clearly beat them, it is not adding value.
             </div>
           </div>
+          )}
+
+          {scoreboard && scoreboard.entries.length > 0 && (
+            <div className="chart-card">
+              <h3 style={{ marginTop: 0, fontSize: 16 }}>
+                Can you trust this forecast? — measured accuracy, not promises
+              </h3>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "#6b7280" }}>
+                      <th style={{ padding: "6px 8px" }}>Horizon</th>
+                      <th style={{ padding: "6px 8px" }}>Avg error (MAPE)</th>
+                      <th style={{ padding: "6px 8px" }}>Direction accuracy</th>
+                      <th style={{ padding: "6px 8px" }}>vs naive carry-forward</th>
+                      <th style={{ padding: "6px 8px" }}>Band honesty (p10–p90 hit rate)</th>
+                      <th style={{ padding: "6px 8px" }}>Folds</th>
+                      <th style={{ padding: "6px 8px" }}>Verdict</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scoreboard.entries.map((e) => (
+                      <tr
+                        key={e.horizon_days}
+                        style={{
+                          borderTop: "1px solid #eceef0",
+                          background:
+                            HORIZON_DAYS[horizon] === e.horizon_days
+                              ? "rgba(217,164,6,0.10)"
+                              : undefined,
+                        }}
+                      >
+                        <td style={{ padding: "6px 8px", fontWeight: 700 }}>
+                          {HORIZON_LABEL[e.horizon_days] ?? `${e.horizon_days}d`}
+                        </td>
+                        <td style={{ padding: "6px 8px" }}>{e.mape_pct.toFixed(2)}%</td>
+                        <td style={{ padding: "6px 8px" }}>
+                          {e.directional_accuracy_pct.toFixed(1)}%
+                        </td>
+                        <td style={{ padding: "6px 8px" }}>
+                          {e.naive_directional_accuracy_pct != null
+                            ? `${e.naive_directional_accuracy_pct.toFixed(1)}% (${
+                                (e.skill_vs_naive_pp ?? 0) >= 0 ? "+" : ""
+                              }${e.skill_vs_naive_pp}pp)`
+                            : "—"}
+                        </td>
+                        <td style={{ padding: "6px 8px" }}>
+                          {e.band_coverage_pct != null
+                            ? `${e.band_coverage_pct.toFixed(1)}% (honest ≈ 80%)`
+                            : "—"}
+                        </td>
+                        <td style={{ padding: "6px 8px" }}>{e.n_folds}</td>
+                        <td style={{ padding: "6px 8px", color: e.underperforming_naive ? "#b91c1c" : "#166534" }}>
+                          {e.underperforming_naive
+                            ? "worse than naive — do not rely on it"
+                            : "beats naive carry-forward"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="chart-caption" style={{ marginTop: 8 }}>
+                Measured on real out-of-sample data (walk-forward backtest; each fold
+                forecasts a period the model never saw). MAPE = average % error.
+                Band honesty = how often the actual price stayed inside the shaded
+                p10–p90 band — ≈80% means the band is trustworthy.{" "}
+                <strong>
+                  No forecast can be 99% accurate — treat every point value as a
+                  scenario, not a promise.
+                </strong>
+              </div>
+            </div>
           )}
 
           <details className="model-info">

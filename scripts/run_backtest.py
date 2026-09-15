@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--horizon", type=int, default=30)
     parser.add_argument("--step", type=int, default=7)
     parser.add_argument("--max-folds", type=int, default=52)
+    parser.add_argument("--suffix", default="", help="filename suffix, e.g. '-1y'")
     parser.add_argument("--refresh", action="store_true", help="re-fetch data first")
     args = parser.parse_args()
 
@@ -54,7 +55,7 @@ def main() -> None:
         step_days=args.step,
         max_folds=args.max_folds,
     )
-    service.persist_backtest(results)
+    service.persist_backtest(results, suffix=args.suffix)
     for name, res in results.items():
         print(f"{name:>18}: {res.summary}")
 

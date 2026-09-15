@@ -156,6 +156,26 @@ export const fetchForecast = (
 export const fetchBacktest = () =>
   request<BacktestResponse>(`/api/v1/backtest/latest`);
 
+export interface BacktestScoreEntry {
+  horizon_days: number;
+  generated_at: string;
+  model_version: string;
+  mape_pct: number;
+  directional_accuracy_pct: number;
+  naive_directional_accuracy_pct: number | null;
+  skill_vs_naive_pp: number | null;
+  band_coverage_pct: number | null;
+  n_folds: number;
+  underperforming_naive: boolean;
+}
+
+export interface BacktestScoreboard {
+  entries: BacktestScoreEntry[];
+}
+
+export const fetchBacktestScoreboard = () =>
+  request<BacktestScoreboard>(`/api/v1/backtest/scoreboard`);
+
 export const fetchHealth = () => request<HealthResponse>(`/api/v1/health`);
 
 export type IndiaSource = "bullion" | "retail";
