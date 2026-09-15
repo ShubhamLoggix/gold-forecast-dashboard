@@ -24,6 +24,28 @@ def _load_dotenv(path: str = ".env") -> None:
 _load_dotenv()
 
 
+def _fallback_hf_cache() -> None:
+    """Point the HuggingFace cache at a larger drive when the system drive is full.
+
+    Weights for TimesFM 2.5/3.0 are ~1 GB; if HF_HOME is unset and the volume
+    holding the default cache has < 2 GB free, redirect to D:\\hf_cache (if D:
+    exists). Override by setting HF_HOME explicitly.
+    """
+    if "HF_HOME" in os.environ:
+        return
+    try:
+        import shutil
+
+        home_drive = Path.home().drive or "C:"
+        if shutil.disk_usage(f"{home_drive}\\").free < 2 * 1024**3 and Path("D:\\").exists():
+            os.environ["HF_HOME"] = "D:\\hf_cache"
+    except Exception:  # noqa: BLE001 - best-effort convenience only
+        pass
+
+
+_fallback_hf_cache()
+
+
 def _env_bool(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
