@@ -61,6 +61,13 @@ bullion-equivalent everywhere (persistent caption in INR mode, API `RateInfo.dis
 shows the exact rate and its date used for the conversion. Do not use the converted figure as an
 arbitrage or "fair price" reference against retail quotes.
 
+**Real retail quotes** are available separately: the INR-mode `Retail (Groww)` source serves
+published city-wise retail rates (24K/22K/18K) scraped from Groww's gold-rates pages. Limitations
+of that source: it is a third-party website (format/layout changes can break ingestion), it
+provides only ~10 days of look-back per city (longer history accumulates locally day by day),
+rates are updated by Groww on their own schedule (not real-time tick data), and TimesFM
+forecasts are still computed on the COMEX bullion series — not on retail rates.
+
 ## Model-drift watchdog
 
 The project includes an automatic honesty check: after every backtest run

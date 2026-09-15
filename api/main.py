@@ -29,6 +29,10 @@ from api.schemas import (
     ForecastResponse,
     HealthResponse,
     HistoryResponse,
+    IndiaCitiesResponse,
+    IndiaCity,
+    IndiaRatePoint,
+    IndiaRatesResponse,
     OhlcPoint,
     RateInfo,
     RefreshResponse,
@@ -334,6 +338,74 @@ def get_forecast(
     return cached
 
 
+def _india_cities_response() -> IndiaCitiesResponse:
+    from ingestion.india_rates import cities_catalog
+
+    try:
+        catalog = cities_catalog()
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"India retail rates source unavailable: {exc}"
+        ) from exc
+    if not catalog:
+        raise HTTPException(
+            status_code=502, detail="India retail rates source returned no cities"
+        )
+    cities = sorted((IndiaCity(**item) for item in catalog), key=lambda c: c.name.lower())
+    return IndiaCitiesResponse(cities=cities)
+
+
+@app.get("/api/v1/india/cities", response_model=IndiaCitiesResponse, tags=["india"])
+def list_india_cities(request: Request = None):  # type: ignore[assignment]
+    _rate_limit_public(request, "india_cities")
+    key = ("india_cities",)
+    cached = deps.cache_get(key)
+    if cached is None:
+        cached = _india_cities_response()
+        deps.cache_set(key, cached)
+    return cached
+
+
+def _india_rates_response(city: str, unit: str) -> IndiaRatesResponse:
+    from ingestion.india_rates import get_city_rates
+
+    try:
+        data = get_city_rates(city)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown city: {city!r}") from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"India retail rates source unavailable: {exc}"
+        ) from exc
+    factor = UNIT_FACTORS[unit]
+    per_gram = data["per_gram"]
+    return IndiaRatesResponse(
+        city_slug=data["city_slug"],
+        city=data["city"],
+        date=data["date"],
+        per_gram=per_gram,
+        per_10g={k: v * factor for k, v in per_gram.items()},
+        pct_change=data["pct_change"],
+        history=[IndiaRatePoint(**point) for point in data["history"]],
+        source="groww:gold-rates",
+    )
+
+
+@app.get("/api/v1/india/rates", response_model=IndiaRatesResponse, tags=["india"])
+def get_india_rates(
+    city: str = Query(default="pune", pattern="^[a-z0-9-]{1,80}$"),
+    unit: str = Query(default="10gram", pattern="^(gram|10gram)$"),
+    request: Request = None,  # type: ignore[assignment]
+):
+    _rate_limit_public(request, "india_rates")
+    key = ("india_rates", city, unit)
+    cached = deps.cache_get(key)
+    if cached is None:
+        cached = _india_rates_response(city, unit)
+        deps.cache_set(key, cached)
+    return cached
+
+
 @app.get("/api/v1/backtest/latest", response_model=BacktestResponse, tags=["backtest"])
 def get_latest_backtest(request: Request = None):  # type: ignore[assignment]
     _rate_limit_public(request, "backtest")
@@ -425,6 +497,13 @@ def refresh(
     last_date = pd.Timestamp(df["date"].iloc[-1]).date() if len(df) else None
     deps.last_refresh_ok = True
     logger.info("On-demand refresh complete (rows=%d last=%s).", len(df), last_date)
+    try:
+        from ingestion.india_rates import refresh_india_rates
+
+        rows_india = refresh_india_rates()
+        logger.info("India retail rates refreshed (rows=%d).", rows_india)
+    except Exception as india_exc:  # noqa: BLE001 - retail view is auxiliary
+        logger.warning("India retail rate refresh failed: %s", india_exc)
     return RefreshResponse(status="ok", rows=len(df), last_date=last_date,
                            cache_invalidated=True)
 

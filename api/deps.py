@@ -99,6 +99,12 @@ def _bootstrap() -> None:
             fetch_usdinr_rate(fx_start, dt.date.today())
         except Exception as fx_exc:  # noqa: BLE001 - gold view must not depend on FX
             logger.warning("USDINR seeding failed: %s", fx_exc)
+        try:
+            from ingestion.india_rates import refresh_india_rates
+
+            refresh_india_rates()
+        except Exception as india_exc:  # noqa: BLE001 - retail view is auxiliary
+            logger.warning("India retail rates seeding failed: %s", india_exc)
         get_service()
     except Exception as exc:  # noqa: BLE001 - bootstrap failures surface via /health
         _bootstrap_error = str(exc)

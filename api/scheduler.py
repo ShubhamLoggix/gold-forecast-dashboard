@@ -60,6 +60,18 @@ def run_now() -> None:
         _scheduler.get_job("daily_data_refresh").modify(next_run_time=dt.datetime.now(dt.timezone.utc))
 
 
+def _refresh_india_rates_job() -> None:
+    """City-wise Indian retail rates (Groww). Auxiliary: failures never flip
+    the main health flag."""
+    try:
+        from ingestion.india_rates import refresh_india_rates
+
+        rows = refresh_india_rates()
+        logger.info("India retail rate refresh done (rows=%d).", rows)
+    except Exception:  # noqa: BLE001
+        logger.warning("India retail rate refresh FAILED:\n%s", traceback.format_exc())
+
+
 def daily_refresh_job() -> None:
     logger.info("Scheduled data refresh starting...")
     try:
@@ -88,6 +100,7 @@ def daily_refresh_job() -> None:
     except Exception:  # noqa: BLE001 - scheduled jobs must not crash the API
         deps.last_refresh_ok = False
         logger.error("Scheduled data refresh FAILED:\n%s", traceback.format_exc())
+    _refresh_india_rates_job()
 
 
 def weekly_backtest_job() -> None:

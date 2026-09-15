@@ -40,6 +40,46 @@ class RateInfo(BaseModel):
     )
 
 
+class IndiaRatePoint(BaseModel):
+    date: dt.date
+    price_24k_pg: float
+    price_22k_pg: float
+    price_18k_pg: float
+
+
+class IndiaCity(BaseModel):
+    slug: str
+    name: str
+    type: str
+    state_name: str | None = None
+
+
+class IndiaCitiesResponse(BaseModel):
+    cities: list[IndiaCity]
+
+
+INDIA_RETAIL_DISCLAIMER = (
+    "Published city-wise RETAIL gold rates from Groww (groww.in/gold-rates) — "
+    "these include import duty, GST, and local dealer premium, and therefore "
+    "differ between cities and from international/bullion prices. Rates move "
+    "during the day; check with your local jeweller before transacting. "
+    "TimesFM forecasts are computed on the COMEX bullion series, not on these "
+    "retail rates."
+)
+
+
+class IndiaRatesResponse(BaseModel):
+    city_slug: str
+    city: str
+    date: dt.date
+    per_gram: dict[str, float]
+    per_10g: dict[str, float]
+    pct_change: dict[str, float] | None = None
+    history: list[IndiaRatePoint]
+    source: str
+    disclaimer: str = INDIA_RETAIL_DISCLAIMER
+
+
 class HistoryResponse(BaseModel):
     start: dt.date
     end: dt.date

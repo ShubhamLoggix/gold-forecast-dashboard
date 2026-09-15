@@ -157,3 +157,49 @@ export const fetchBacktest = () =>
   request<BacktestResponse>(`/api/v1/backtest/latest`);
 
 export const fetchHealth = () => request<HealthResponse>(`/api/v1/health`);
+
+export type IndiaSource = "bullion" | "retail";
+
+export interface IndiaCity {
+  slug: string;
+  name: string;
+  type: string;
+  state_name: string | null;
+}
+
+export interface KaratPrices {
+  "24k": number;
+  "22k": number;
+  "18k": number;
+}
+
+export interface IndiaRatePoint {
+  date: string;
+  price_24k_pg: number;
+  price_22k_pg: number;
+  price_18k_pg: number;
+}
+
+export interface IndiaCitiesResponse {
+  cities: IndiaCity[];
+}
+
+export interface IndiaRatesResponse {
+  city_slug: string;
+  city: string;
+  date: string;
+  per_gram: KaratPrices;
+  per_10g: KaratPrices;
+  pct_change: KaratPrices | null;
+  history: IndiaRatePoint[];
+  source: string;
+  disclaimer: string;
+}
+
+export const fetchIndiaCities = () =>
+  request<IndiaCitiesResponse>(`/api/v1/india/cities`);
+
+export const fetchIndiaRates = (city: string, unit: Unit) =>
+  request<IndiaRatesResponse>(
+    `/api/v1/india/rates?city=${encodeURIComponent(city)}&unit=${unit}`,
+  );

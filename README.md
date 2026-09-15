@@ -25,6 +25,19 @@ model-info panel); don't compare the converted value against a jeweler's quote a
 to match. The conversion metadata (`₹X/USD as of DATE`, staleness flag) is always shown for
 transparency.
 
+## India retail rates (city-wise, real quotes)
+
+INR mode has a **Source** toggle: `Bullion (COMEX)` (the converted view above) vs
+`Retail (Groww)` — actual published city-wise retail rates (24K/22K/18K, per gram or per 10g)
+scraped from [Groww's gold-rates pages](https://groww.in/gold-rates). Covers ~350 Indian
+cities with a city selector, prev-day % change, and the last ~10 days of history per city
+(more accumulates daily in `data/processed/india_gold_rates.parquet`).
+
+- API: `GET /api/v1/india/cities` and `GET /api/v1/india/rates?city=pune&unit=10gram`
+- Refreshed by the daily scheduler alongside the FX top-up; failures never degrade /health
+- Retail rates include duty/GST/premium and vary by city — they intentionally differ from
+  bullion prices; each response carries an attribution + disclaimer block.
+
 ## Architecture
 
 ```

@@ -17,6 +17,8 @@ import {
   fetchForecast,
   fetchHealth,
   fetchHistory,
+  fetchIndiaCities,
+  fetchIndiaRates,
   type BacktestResponse,
   type Currency,
   type ForecastResponse,
@@ -24,6 +26,8 @@ import {
   type HealthResponse,
   type HistoryResponse,
   type Horizon,
+  type IndiaCity,
+  type IndiaRatesResponse,
   type Karat,
   type Unit,
 } from "./api";
@@ -48,6 +52,10 @@ const INR_CAPTION =
   "bullion-equivalent price, not an Indian retail/jeweler quote, which also includes " +
   "import duty, GST, and making charges. Historical points use each date's own " +
   "USD/INR rate; the forecast uses the latest rate.";
+
+const RETAIL_FALLBACK_CITIES: IndiaCity[] = [
+  { slug: "pune", name: "Pune", type: "city", state_name: "Maharashtra" },
+];
 
 interface Row {
   date: string;
@@ -168,6 +176,12 @@ export default function App() {
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [useCustom, setUseCustom] = useState(false);
+  const [inrSource, setInrSource] = useState<"bullion" | "retail">("bullion");
+  const [city, setCity] = useState("pune");
+  const [cities, setCities] = useState<IndiaCity[] | null>(null);
+  const [india, setIndia] = useState<IndiaRatesResponse | null>(null);
+  const [indiaError, setIndiaError] = useState<ApiError | null>(null);
+  const [indiaLoading, setIndiaLoading] = useState(false);
 
   const [history, setHistory] = useState<HistoryResponse | null>(null);
   const [forecast, setForecast] = useState<ForecastResponse | null>(null);
@@ -177,7 +191,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   const isInr = currency === "inr";
-  const unitLabel = isInr
+  const isRetail = isInr && inrSource === "retail";
+  const unitLabel = isRetail
+    ? `INR retail (Groww) — ${india?.city ?? city}, per ${unit === "10gram" ? "10g" : "g"} (${karat.toUpperCase()})`
+    : isInr
     ? `INR per ${unit === "10gram" ? "10g" : "g"} (${karat.toUpperCase()}, bullion-equiv.)`
     : "USD/oz (COMEX GC=F)";
 
@@ -187,6 +204,7 @@ export default function App() {
   );
 
   const load = useCallback(async () => {
+    if (isRetail) return; // retail mode fetches its own data
     setLoading(true);
     setError(null);
     try {
@@ -220,7 +238,30 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [granularity, rangeLabel, horizon, currency, karat, unit, useCustom, customStart, customEnd]);
+  }, [granularity, rangeLabel, horizon, currency, karat, unit, useCustom, customStart, customEnd, isRetail]);
+
+  const loadRetail = useCallback(async () => {
+    setIndiaLoading(true);
+    setIndiaError(null);
+    try {
+      setIndia(await fetchIndiaRates(city, unit));
+    } catch (e) {
+      setIndiaError(e as ApiError);
+    } finally {
+      setIndiaLoading(false);
+    }
+  }, [city, unit]);
+
+  useEffect(() => {
+    if (isRetail) void loadRetail();
+  }, [isRetail, loadRetail]);
+
+  useEffect(() => {
+    if (!isRetail || cities) return;
+    fetchIndiaCities()
+      .then((r) => setCities(r.cities.length ? r.cities : RETAIL_FALLBACK_CITIES))
+      .catch(() => setCities(RETAIL_FALLBACK_CITIES));
+  }, [isRetail, cities]);
 
   useEffect(() => {
     void load();
@@ -255,6 +296,42 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadRetailCsv = () => {
+    if (!india) return;
+    const lines = [
+      `date,price_24k_pg,price_22k_pg,price_18k_pg,price_24k_p10g,price_22k_p10g,price_18k_p10g,city,source`,
+    ];
+    for (const p of india.history) {
+      lines.push(
+        [
+          p.date,
+          p.price_24k_pg,
+          p.price_22k_pg,
+          p.price_18k_pg,
+          p.price_24k_pg * 10,
+          p.price_22k_pg * 10,
+          p.price_18k_pg * 10,
+          india.city,
+          "groww",
+        ].join(","),
+      );
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.download = `india_retail_gold_${city}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const retailRows = useMemo(() => {
+    if (!india) return [];
+    const pgKey =
+      karat === "24k" ? "price_24k_pg" : karat === "22k" ? "price_22k_pg" : "price_18k_pg";
+    const factor = unit === "10gram" ? 10 : 1;
+    return india.history.map((p) => ({ date: p.date, retail: p[pgKey] * factor }));
+  }, [india, karat, unit]);
+
   return (
     <div className="container">
       <h1>Gold Price Forecast — TimesFM</h1>
@@ -283,6 +360,36 @@ export default function App() {
         </div>
         {isInr && (
           <>
+            <div className="control-group">
+              <label>Source</label>
+              <div className="seg">
+                {(["bullion", "retail"] as const).map((s) => (
+                  <button
+                    key={s}
+                    className={inrSource === s ? "active" : ""}
+                    onClick={() => setInrSource(s)}
+                  >
+                    {s === "bullion" ? "Bullion (COMEX)" : "Retail (Groww)"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {isRetail && (
+              <div className="control-group">
+                <label>City</label>
+                <select
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d7dbe0" }}
+                >
+                  {(cities ?? RETAIL_FALLBACK_CITIES).map((c) => (
+                    <option key={c.slug} value={c.slug}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="control-group">
               <label>Karat</label>
               <div className="seg">
@@ -313,6 +420,8 @@ export default function App() {
             </div>
           </>
         )}
+        {!isRetail && (
+        <>
         <div className="control-group">
           <label>Granularity</label>
           <div className="seg">
@@ -379,9 +488,14 @@ export default function App() {
             />
           </div>
         </div>
+        </>)}
         <div className="control-group">
           <label>Export</label>
-          <button className="seg" onClick={downloadCsv} style={{ padding: "8px 14px" }}>
+          <button
+            className="seg"
+            onClick={() => (isRetail ? downloadRetailCsv() : downloadCsv())}
+            style={{ padding: "8px 14px" }}
+          >
             CSV
           </button>
         </div>
@@ -398,6 +512,28 @@ export default function App() {
         <div className="skeleton" />
       ) : (
         <>
+          {isRetail && india && (
+            <div className="metrics">
+              {KARATS.map((k) => {
+                const val = unit === "10gram" ? india.per_10g[k] : india.per_gram[k];
+                const pct = india.pct_change?.[k];
+                return (
+                  <Metric
+                    key={k}
+                    label={`${k.toUpperCase()} — ${india.city} (per ${unit === "10gram" ? "10g" : "g"})`}
+                    value={formatValue(val)}
+                    delta={
+                      pct != null
+                        ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}% vs prev day`
+                        : undefined
+                    }
+                    deltaColor={pct != null && pct >= 0 ? "up" : "down"}
+                  />
+                );
+              })}
+            </div>
+          )}
+          {!isRetail && (
           <div className="metrics">
             <Metric
               label={isInr ? `Last close (${karat.toUpperCase()}, per ${unit === "10gram" ? "10g" : "g"})` : "Last close (GC=F)"}
@@ -420,7 +556,60 @@ export default function App() {
               deltaColor={tmSummary && tmSummary.directional_accuracy_pct >= 50 ? "up" : "down"}
             />
           </div>
+          )}
 
+          {isRetail && (
+            <div className="chart-card">
+              {indiaLoading && <div className="skeleton" />}
+              {indiaError && (
+                <div className="error-state">
+                  <strong>Failed to load India retail rates.</strong>
+                  <div>{indiaError.message}</div>
+                  <button onClick={() => void loadRetail()}>Retry</button>
+                </div>
+              )}
+              {!indiaLoading && !indiaError && india && (
+                <>
+                  <ResponsiveContainer width="100%" height={420}>
+                    <ComposedChart
+                      data={retailRows}
+                      margin={{ top: 10, right: 10, bottom: 0, left: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#eceef0" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={24} />
+                      <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11 }} width={70} />
+                      <Tooltip
+                        formatter={(value: number | string) =>
+                          typeof value === "number" ? formatValue(value) : value
+                        }
+                      />
+                      <Legend />
+                      <Line
+                        dataKey="retail"
+                        stroke="#1266a2"
+                        strokeWidth={2.2}
+                        dot={false}
+                        name={`Retail close (${karat.toUpperCase()})`}
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                  <div className="chart-caption" data-testid="unit-label" style={{ fontWeight: 600 }}>
+                    {unitLabel}
+                  </div>
+                  <div className="chart-caption" style={{ marginTop: 6 }}>
+                    Source: Groww gold rates — published retail quotes for {india.city} as of{" "}
+                    {india.date} (last {india.history.length} available days). Retail rates
+                    include import duty, GST, and local dealer premium — they intentionally
+                    differ from bullion prices.
+                  </div>
+                  <div className="chart-caption" style={{ marginTop: 6 }}>
+                    {india.disclaimer}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          {!isRetail && (
           <div className="chart-card">
             <ResponsiveContainer width="100%" height={420}>
               <ComposedChart data={rows} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
@@ -480,6 +669,7 @@ export default function App() {
               baselines. If TimesFM does not clearly beat them, it is not adding value.
             </div>
           </div>
+          )}
 
           <details className="model-info">
             <summary>Model info</summary>
@@ -510,8 +700,10 @@ export default function App() {
                 gold data
               </li>
               <li>
-                <strong>Data source:</strong> COMEX Gold Futures (GC=F) via Yahoo Finance;
-                last data date {history?.end}
+                <strong>Data source:</strong>{" "}
+                {isRetail
+                  ? `Indian city retail rates (Groww gold rates) — ${india?.city ?? city}, as of ${india?.date ?? "—"}`
+                  : `COMEX Gold Futures (GC=F) via Yahoo Finance; last data date ${history?.end}`}
               </li>
               {isInr && forecast?.rate && (
                 <li>
