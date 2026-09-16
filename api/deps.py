@@ -86,17 +86,14 @@ def _bootstrap() -> None:
             update_canonical(
                 dt.date.fromisoformat(settings.history_start), dt.date.today()
             )
-        # FX series for the INR view. Full history window on first seed so
-        # every historical gold date has a rate; later runs just top up.
+        # FX series for the INR view. Full-window request is cache-aware:
+        # covered caches are skipped, short ones are self-healed.
         try:
-            fx_start = dt.date.today() - dt.timedelta(days=14)
-            from ingestion.usdinr import load_usdinr
+            from ingestion.usdinr import fetch_usdinr_rate
 
-            try:
-                load_usdinr()
-            except FileNotFoundError:
-                fx_start = dt.date.fromisoformat(settings.history_start)
-            fetch_usdinr_rate(fx_start, dt.date.today())
+            fetch_usdinr_rate(
+                dt.date.fromisoformat(settings.history_start), dt.date.today()
+            )
         except Exception as fx_exc:  # noqa: BLE001 - gold view must not depend on FX
             logger.warning("USDINR seeding failed: %s", fx_exc)
         try:

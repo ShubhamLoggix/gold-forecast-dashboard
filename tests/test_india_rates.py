@@ -113,6 +113,56 @@ def test_cities_catalog():
     assert catalog[0]["state_name"] == "Maharashtra"
 
 
+def test_backfill_tags_sources_and_preserves_live(isolated_settings, monkeypatch):
+    import ingestion.fetch_gold_prices as fgp
+    import ingestion.india_rates as mod
+    import ingestion.usdinr as usd_mod
+    from tests.conftest import make_history
+
+    history = make_history(n=300)  # 2024-01-01 .. ~2025-07
+    monkeypatch.setattr(fgp, "load_canonical", lambda *a, **k: history)
+    monkeypatch.setattr(
+        usd_mod, "load_usdinr",
+        lambda **k: pd.DataFrame(
+            {
+                "date": pd.bdate_range("2024-01-01", periods=300),
+                "open": 83.0, "high": 83.0, "low": 83.0, "close": 83.2,
+                "volume": 0.0, "source": "fixture",
+            }
+        ),
+    )
+
+    processed = isolated_settings.data_dir / "processed"
+    processed.mkdir(parents=True, exist_ok=True)
+    live = pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2026-09-14"), pd.Timestamp("2026-09-15")],
+            "city_slug": ["pune", "pune"],
+            "city": ["Pune", "Pune"],
+            "price_24k_pg": [15409.0, 15317.0],
+            "price_22k_pg": [14125.0, 14041.0],
+            "price_18k_pg": [11557.0, 11488.0],
+            "source": ["groww_live", "groww_live"],
+        }
+    )
+    live.to_parquet(processed / "india_gold_rates.parquet", index=False)
+
+    result = mod.backfill_from_comex(city_slug="pune", data_dir=isolated_settings.data_dir)
+    assert result["backfilled"] > 0
+    cache = mod.load_cache(isolated_settings.data_dir)
+    est = cache[cache["source"] == "comex_converted"]
+    live_rows = cache[cache["source"] == "groww_live"]
+    assert len(est) > 0
+    assert est["date"].max() < pd.Timestamp("2026-09-14")  # never crosses live data
+    assert len(live_rows) == 2
+    assert (est["price_24k_pg"] > 0).all()
+
+    data = mod.get_city_rates("pune", data_dir=isolated_settings.data_dir)
+    sources = {p["source"] for p in data["history"]}
+    assert "comex_converted" in sources
+    assert "groww_live" in sources
+
+
 def test_india_api_endpoints(stub_groww, monkeypatch, tmp_path):
     frame = make_history(n=300)
     processed = tmp_path / "processed"

@@ -86,16 +86,12 @@ def daily_refresh_job() -> None:
             dt.date.fromisoformat(settings.history_start), dt.date.today(),
             force_refresh=False,
         )
-        # Refresh the USD/INR FX series on the same schedule. Full-window fetch
-        # if the canonical file doesn't exist yet, else a recent top-up.
-        fx_start = dt.date.today() - dt.timedelta(days=14)
-        try:
-            from ingestion.usdinr import load_usdinr
-
-            load_usdinr()
-        except FileNotFoundError:
-            fx_start = dt.date.fromisoformat(settings.history_start)
-        fetch_usdinr_rate(fx_start, dt.date.today())
+        # Refresh the USD/INR FX series on the same schedule. The fetch is
+        # cache-aware: requesting the full window is a no-op when the cache
+        # already covers it, and self-heals when the cache is short.
+        fetch_usdinr_rate(
+            dt.date.fromisoformat(settings.history_start), dt.date.today()
+        )
         deps.invalidate_response_cache()
         deps.last_refresh_ok = True
         logger.info("Scheduled data refresh done (gold rows=%d).", len(df))

@@ -45,6 +45,7 @@ class IndiaRatePoint(BaseModel):
     price_24k_pg: float
     price_22k_pg: float
     price_18k_pg: float
+    source: str = "groww_live"
 
 
 class IndiaCity(BaseModel):

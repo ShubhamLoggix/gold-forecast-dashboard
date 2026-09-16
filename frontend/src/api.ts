@@ -253,6 +253,7 @@ export interface IndiaRatePoint {
   price_24k_pg: number;
   price_22k_pg: number;
   price_18k_pg: number;
+  source: string;
 }
 
 export interface IndiaCitiesResponse {

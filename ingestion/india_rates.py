@@ -28,7 +28,10 @@ logger = logging.getLogger("gold_forecast.ingestion")
 GROWW_GOLD_RATES_URL = "https://groww.in/gold-rates"
 GROWW_CITY_URL_FMT = "https://groww.in/gold-rates/gold-rate-today-in-{slug}"
 INDIA_RATES_FILENAME = "india_gold_rates.parquet"
-SOURCE_NAME = "groww:gold-rates"
+SOURCE_NAME = "groww_live"
+SOURCE_COMEX_CONVERTED = "comex_converted"
+# Earlier cache rows used this tag; they are still live Groww quotes.
+_LIVE_SOURCES = ("groww_live", "groww:gold-rates")
 
 _HUB_TTL_SECONDS = 900.0
 _hub_cache: dict | None = None
@@ -137,8 +140,9 @@ def _merge_save(frame: pd.DataFrame, data_dir: Path | None = None) -> pd.DataFra
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if out_path.exists():
         cached = pd.read_parquet(out_path)
-        cached["date"] = pd.to_datetime(cached["date"]).dt.normalize()
+        cached["date"] = pd.to_datetime(cached["date"]).dt.as_unit("us")
         frame = pd.concat([cached, frame], ignore_index=True)
+    frame["date"] = pd.to_datetime(frame["date"]).dt.as_unit("us")
     frame = (
         frame.sort_values(["city_slug", "date"])
         .drop_duplicates(subset=["city_slug", "date"], keep="last")
@@ -190,6 +194,97 @@ def refresh_india_rates(
     return len(merged)
 
 
+def backfill_from_comex(
+    city_slug: str = "pune",
+    data_dir: Path | None = None,
+) -> dict:
+    """Estimate historical city retail rates: bullion-equivalent COMEX close
+    (converted at each date's own USD/INR rate) scaled by the city's CURRENT
+    live retail premium, tagged `comex_converted`.
+
+    Fills only dates strictly before the first `groww_live` row for the city —
+    live data always wins. Gaps (dates missing bullion close or FX) are
+    returned, never silently interpolated.
+    """
+    from conversion import PURITY_FACTORS, TROY_OZ_TO_GRAM
+    from ingestion.fetch_gold_prices import load_canonical
+    from ingestion.usdinr import load_usdinr
+
+    cached = load_cache(data_dir)
+    city_rows = cached[cached["city_slug"] == city_slug].sort_values("date")
+    live = city_rows[city_rows["source"].isin(_LIVE_SOURCES)]
+    if live.empty:
+        return {"backfilled": 0, "gaps": [], "reason": "no live rows to anchor premium"}
+    first_live = pd.Timestamp(live["date"].min()).normalize()
+
+    gold = load_canonical()
+    bullion = pd.DataFrame(
+        {
+            "date": pd.to_datetime(gold["date"]).dt.normalize().dt.as_unit("us"),
+            "close": gold["close"].astype(float),
+        }
+    )
+    fx_full = load_usdinr()
+    lookup = pd.DataFrame(
+        {
+            "date": pd.to_datetime(fx_full["date"]).dt.normalize().dt.as_unit("us"),
+            "usd_inr_rate": fx_full["close"].astype(float),
+        }
+    ).sort_values("date")
+    bullion = pd.merge_asof(bullion, lookup, on="date", direction="backward")
+
+    latest_live = live.iloc[-1]
+    ratios = {
+        karat: (
+            float(latest_live[_CARAT_COLS[karat]])
+            / max(
+                float(bullion["close"].iloc[-1])
+                * float(bullion["usd_inr_rate"].iloc[-1])
+                / TROY_OZ_TO_GRAM
+                * PURITY_FACTORS[karat],
+                1e-9,
+            )
+        )
+        for karat in _CARAT_KEYS
+    }
+
+    rows = []
+    gaps: list[str] = []
+    for _, b in bullion.iterrows():
+        d = pd.Timestamp(b["date"]).normalize()
+        if d >= first_live:
+            break
+        if pd.isna(b["close"]) or pd.isna(b["usd_inr_rate"]):
+            gaps.append(d.date().isoformat())
+            continue
+        row = {
+            "date": d,
+            "city_slug": city_slug,
+            "city": latest_live["city"],
+            "source": SOURCE_COMEX_CONVERTED,
+        }
+        for karat, col in _CARAT_COLS.items():
+            bullion_pg = (
+                float(b["close"]) * float(b["usd_inr_rate"])
+                / TROY_OZ_TO_GRAM * PURITY_FACTORS[karat]
+            )
+            row[col] = bullion_pg * ratios[karat]
+        rows.append(row)
+    if not rows:
+        return {"backfilled": 0, "gaps": gaps, "reason": "nothing to backfill"}
+
+    merged = _merge_save(pd.DataFrame(rows), data_dir)
+    if gaps:
+        logger.warning(
+            "backfill gaps (%d dates, not filled): %s", len(gaps), gaps[:10]
+        )
+    logger.info(
+        "retail backfill for %s: %d comex_converted rows, %d gaps.",
+        city_slug, len(rows), len(gaps),
+    )
+    return {"backfilled": len(rows), "gaps": gaps}
+
+
 def get_city_rates(slug: str, data_dir: Path | None = None) -> dict:
     """Today's rate + recent history for one city, for the API layer.
 
@@ -238,6 +333,7 @@ def get_city_rates(slug: str, data_dir: Path | None = None) -> dict:
             "price_24k_pg": float(row["price_24k_pg"]),
             "price_22k_pg": float(row["price_22k_pg"]),
             "price_18k_pg": float(row["price_18k_pg"]),
+            "source": str(row.get("source") or SOURCE_NAME),
         }
         for _, row in city_rows.iterrows()
     ]

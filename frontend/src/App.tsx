@@ -729,10 +729,15 @@ export default function App() {
                   </div>
                   <div className="chart-caption" style={{ marginTop: 6 }}>
                     Source: Groww gold rates — published retail quotes for {india.city} as of{" "}
-                    {india.date} (last {india.history.length} available days; Groww only
-                    publishes ~10 days — history accumulates here daily). Retail rates
-                    include import duty, GST, and local dealer premium — they intentionally
-                    differ from bullion prices.
+                    {india.date}. Retail rates include import duty, GST, and local dealer
+                    premium — they intentionally differ from bullion prices.
+                    {(() => {
+                      const est = india.history.filter((p) => p.source === "comex_converted");
+                      const liveSince = india.history.find((p) => p.source === "groww_live")?.date;
+                      return est.length > 0
+                        ? ` First ${est.length} days are estimates (COMEX × premium, tagged comex_converted); live Groww quotes since ${liveSince}.`
+                        : "";
+                    })()}
                   </div>
                   {indiaForecast && (
                     <div className="chart-caption" style={{ marginTop: 6 }}>
