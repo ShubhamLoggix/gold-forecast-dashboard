@@ -59,6 +59,37 @@ def test_silver_ingestion_roundtrip(isolated_settings, monkeypatch):
     assert loaded["close"].iloc[0] > 0
 
 
+def test_cross_metal_units_rejected_with_422(isolated_settings, monkeypatch, tmp_path):
+    """The backend must reject the other metal's unit with a clear 422.
+
+    This pins the contract the frontend's unit-mismatch fix relies on: the UI
+    must never send e.g. silver's `kg` to the gold endpoint. Regression origin:
+    the Gold<->Silver unit-carryover bug on the frontend.
+    """
+    processed = tmp_path / "processed"
+    processed.mkdir(parents=True)
+    make_history(n=300).to_parquet(processed / "gold_prices_daily.parquet", index=False)
+    _silver_frame(300).to_parquet(processed / "silver_prices_daily.parquet", index=False)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+
+    service = main_mod.GoldForecastService(model_version="2.5")
+    monkeypatch.setattr(deps, "get_service", lambda: service)
+    deps.invalidate_response_cache()
+    with TestClient(app) as client:
+        assert client.get(
+            "/api/v1/history", params={"metal": "gold", "unit": "kg", "currency": "inr"}
+        ).status_code == 422
+        assert client.get(
+            "/api/v1/history", params={"metal": "silver", "unit": "10gram", "currency": "inr"}
+        ).status_code == 422
+        assert client.get(
+            "/api/v1/forecast", params={"metal": "gold", "unit": "kg", "currency": "inr", "horizon": "1w"}
+        ).status_code == 422
+        assert client.get(
+            "/api/v1/forecast", params={"metal": "silver", "unit": "10gram", "currency": "inr", "horizon": "1w"}
+        ).status_code == 422
+
+
 def test_silver_api_endpoints(isolated_settings, monkeypatch, tmp_path):
     from tests.test_api import StubModel
 

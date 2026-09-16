@@ -41,7 +41,7 @@ import {
   type Metal,
   type Unit,
 } from "./api";
-
+import { DEFAULT_UNIT_BY_METAL, UNITS_BY_METAL, sanitizeUnit } from "./metalUnits";
 const GRANULARITIES: Granularity[] = ["day", "week", "month"];
 const RANGES: { label: string; days: number | null }[] = [
   { label: "1M", days: 21 },
@@ -53,14 +53,6 @@ const RANGES: { label: string; days: number | null }[] = [
 const HORIZONS: Horizon[] = ["1w", "1m", "3m", "6m", "1y"];
 const KARATS: Karat[] = ["24k", "22k", "18k"];
 const FINENESSES: Fineness[] = ["999", "958", "925"];
-const GOLD_UNITS: { id: Unit; label: string }[] = [
-  { id: "10gram", label: "per 10g" },
-  { id: "gram", label: "per g" },
-];
-const SILVER_UNITS: { id: Unit; label: string }[] = [
-  { id: "kg", label: "per kg" },
-  { id: "gram", label: "per g" },
-];
 
 const INR_CAPTION =
   "Converted from COMEX USD futures at the live USD/INR rate — this is a theoretical " +
@@ -235,12 +227,14 @@ export default function App() {
   const isInr = currency === "inr";
   const isRetail = isInr && inrSource === "retail" && metal === "gold";
   const isSilver = metal === "silver";
-  const units = isSilver ? SILVER_UNITS : GOLD_UNITS;
-  // Reset unit when switching metals (unit vocabularies differ).
-  useEffect(() => {
-    if (isSilver && unit === "10gram") setUnit("kg");
-    if (!isSilver && unit === "kg") setUnit("10gram");
-  }, [isSilver, unit]);
+  const units = UNITS_BY_METAL[metal];
+
+  // Atomic reset: switching metal sets THAT metal's own valid default unit in
+  // the same event — no post-render effect race with the fetch.
+  const handleMetalChange = (m: Metal) => {
+    setMetal(m);
+    setUnit(DEFAULT_UNIT_BY_METAL[m]);
+  };
   const unitLabel = isRetail
     ? `INR retail (Groww) — ${india?.city ?? city}, per ${unit === "10gram" ? "10g" : "g"} (${karat.toUpperCase()})`
     : isSilver
@@ -258,6 +252,9 @@ export default function App() {
 
   const load = useCallback(async () => {
     if (isRetail) return; // retail mode fetches its own data
+    // Defensive: never fire an API call with a unit invalid for this metal
+    // (root-cause safety net for the 422 unit-mismatch bug).
+    const safeUnit = sanitizeUnit(metal, unit);
     setLoading(true);
     setError(null);
     try {
@@ -266,7 +263,7 @@ export default function App() {
         granularity,
         currency,
         karat,
-        unit,
+        unit: safeUnit,
         metal,
         fineness,
       };
@@ -280,7 +277,7 @@ export default function App() {
       }
       const [h, f, b, hl] = await Promise.all([
         fetchHistory(params),
-        fetchForecast(horizon, true, currency, karat, unit, metal, fineness),
+        fetchForecast(horizon, true, currency, karat, safeUnit, metal, fineness),
         fetchBacktest().catch(() => null),
         fetchHealth().catch(() => null),
       ]);
@@ -293,15 +290,17 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [granularity, rangeLabel, horizon, currency, karat, unit, useCustom, customStart, customEnd, isRetail]);
+  }, [granularity, rangeLabel, horizon, currency, karat, unit, useCustom, customStart, customEnd, isRetail, metal]);
 
   const loadRetail = useCallback(async () => {
     setIndiaLoading(true);
     setIndiaError(null);
     try {
+      // Retail is a gold-only view; sanitize the shared unit for gold.
+      const safeUnit = sanitizeUnit("gold", unit);
       const [rates, fc] = await Promise.all([
-        fetchIndiaRates(city, unit),
-        fetchIndiaForecast(city, horizon, karat, unit).catch(() => null),
+        fetchIndiaRates(city, safeUnit),
+        fetchIndiaForecast(city, horizon, karat, safeUnit).catch(() => null),
       ]);
       setIndia(rates);
       setIndiaForecast(fc);
@@ -438,15 +437,15 @@ export default function App() {
         <div className="control-group">
           <label>Metal</label>
           <div className="seg">
-            {(["gold", "silver"] as Metal[]).map((m) => (
-              <button
-                key={m}
-                className={metal === m ? "active" : ""}
-                onClick={() => setMetal(m)}
-              >
-                {m === "gold" ? "Gold" : "Silver"}
-              </button>
-            ))}
+                {(["gold", "silver"] as Metal[]).map((m) => (
+                  <button
+                    key={m}
+                    className={metal === m ? "active" : ""}
+                    onClick={() => handleMetalChange(m)}
+                  >
+                    {m === "gold" ? "Gold" : "Silver"}
+                  </button>
+                ))}
           </div>
         </div>
         <div className="control-group">
