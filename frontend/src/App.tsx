@@ -882,6 +882,8 @@ export default function App() {
                 const modelOrder = [
                   "chronos-t5-tiny",
                   "timesfm-2.5",
+                  "timesfm-2.5-ft-lora",
+                  "timesfm-2.5-hf-base",
                   "naive-last-value",
                   "sma-20",
                 ];

@@ -70,6 +70,43 @@ forecasts are still computed on the COMEX bullion series — the retail-tab fore
 **estimate** (bullion forecast × the city's current retail premium ratio), since only the
 COMEX series has enough history to forecast directly.
 
+## Fine-tuning experiment (negative result — documented deliberately)
+
+Following Google's documented TimesFM 2.5 fine-tuning path (HuggingFace
+Transformers + PEFT LoRA, `timesfm-forecasting/examples/finetuning/`), the model
+was LoRA-fine-tuned (r=4, all-linear, ~0.6% params) on gold data with strict
+split discipline: training used ONLY the first 512 daily points (2021-09-15 →
+2023-09-27), strictly before every walk-forward test window, then evaluated on
+the identical folds as the zero-shot bake-off.
+
+**Result: fine-tuning made out-of-sample performance WORSE at every horizon.**
+
+| Horizon | zero-shot (same HF code path) | fine-tuned LoRA |
+|---|---|---|
+| 1w MAPE | 1.59% | 1.95% |
+| 1m MAPE | 3.09% | 3.88% |
+| 3m MAPE | 5.77% | 7.22% |
+| 6m MAPE | 10.17% | 12.73% |
+| band coverage (1w) | 40.0% | 13.5% |
+
+In-sample training loss fell 1.36 → 0.13 while out-of-sample degraded — the
+classic overfitting signature on ~500 training points, exactly the failure mode
+expected for daily financial data. The fine-tuned bands are also badly
+under-covering (13–19% vs 40% zero-shot). No leakage: the training window ends
+months before the first evaluation fold.
+
+Scope note: the HF inference path caps forecasts at 128 steps, so the
+fine-tuned comparison covers 1w–6m only; the 1y row is served by the zero-shot
+package path (which supports 256).
+
+Compute cost (CPU only, no GPU available): training 4 epochs / 400 windows /
+batch 4 took **107 min**; evaluation (both models × 4 horizons × folds) took
+37 min; ~2.5 h total. Any serious fine-tuning attempt needs GPU time.
+
+**Conclusion: keep the zero-shot models.** The negative result is valuable:
+it demonstrates that "fine-tune it" is not an automatic accuracy win for small
+financial datasets, contrary to common hype.
+
 ## Model-drift watchdog
 
 The project includes an automatic honesty check: after every backtest run
