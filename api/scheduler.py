@@ -201,18 +201,23 @@ def weekly_backtest_job() -> None:
             model_version=settings.model_version, context_length=settings.context_length
         )
         service.load_model()
-        results = service.backtest(history, horizon_days=30, step_days=7, max_folds=26)
-        service.persist_backtest(results)
-        deps.invalidate_response_cache()
-        logger.info("Scheduled weekly backtest done (30d).")
-        # Long-horizon trust score (overlapping quarterly folds).
-        try:
-            results_1y = service.backtest(
-                history, horizon_days=252, step_days=63, max_folds=8
-            )
-            service.persist_backtest(results_1y, suffix="-1y")
-            logger.info("Scheduled weekly backtest done (1y).")
-        except Exception:  # noqa: BLE001 - 1y score is supplementary
-            logger.warning("1y backtest FAILED:\n%s", traceback.format_exc())
+        # Full trust scoreboard: one report per dashboard horizon, each with its
+        # own band calibration factor.
+        for days, step, max_folds, suffix in (
+            (5, 7, 52, "-1w"),
+            (21, 7, 52, "-1m"),
+            (63, 21, 26, "-3m"),
+            (126, 63, 13, "-6m"),
+            (252, 63, 8, "-1y"),
+        ):
+            try:
+                results = service.backtest(
+                    history, horizon_days=days, step_days=step, max_folds=max_folds
+                )
+                service.persist_backtest(results, suffix=suffix)
+                deps.invalidate_response_cache()
+                logger.info("Scheduled weekly backtest %s done.", suffix)
+            except Exception:  # noqa: BLE001 - one horizon must not kill the rest
+                logger.warning("Weekly backtest %s FAILED:\n%s", suffix, traceback.format_exc())
     except Exception:  # noqa: BLE001
         logger.error("Scheduled weekly backtest FAILED:\n%s", traceback.format_exc())
