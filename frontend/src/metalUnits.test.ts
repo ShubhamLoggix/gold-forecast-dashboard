@@ -6,9 +6,11 @@
 // sanitize/reset behavior so a future metal cannot reintroduce the bug.
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_UNIT_BY_METAL,
+  KARATS_BY_GOLD,
+  QUALITY_DEFAULTS_BY_METAL,
   UNITS_BY_METAL,
   isValidUnit,
+  sanitizeQualityParams,
   sanitizeUnit,
 } from "./metalUnits";
 
@@ -20,13 +22,13 @@ describe("metal switch keeps unit valid (regression: unit-mismatch 422 loop)", (
 
     // user clicks Silver: handler sets the new metal's own default atomically
     metal = "silver";
-    unit = DEFAULT_UNIT_BY_METAL[metal];
+    unit = QUALITY_DEFAULTS_BY_METAL[metal].unit;
     expect(isValidUnit(metal, unit)).toBe(true);
     expect(unit).toBe("kg");
 
     // user clicks back to Gold: default resets again
     metal = "gold";
-    unit = DEFAULT_UNIT_BY_METAL[metal];
+    unit = QUALITY_DEFAULTS_BY_METAL[metal].unit;
     expect(isValidUnit(metal, unit)).toBe(true);
     expect(unit).toBe("10gram");
   });
@@ -60,7 +62,73 @@ describe("metal switch keeps unit valid (regression: unit-mismatch 422 loop)", (
     for (const metal of ["gold", "silver"] as const) {
       const units = UNITS_BY_METAL[metal];
       expect(units.length).toBeGreaterThan(0);
-      expect(units.some((u) => u.id === DEFAULT_UNIT_BY_METAL[metal])).toBe(true);
+      expect(
+        units.some((u) => u.id === QUALITY_DEFAULTS_BY_METAL[metal].unit)
+      ).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: "karat applies to gold only — use fineness for silver" 422.
+// The previous fix only covered the metal SWITCH; this bug appeared when the
+// user changed a DIFFERENT control (horizon) while already on Silver, because
+// the karat state from a previous Gold session was still being sent.
+// These tests sanitize quality params for EVERY control change, per metal.
+// ---------------------------------------------------------------------------
+describe("quality params (karat/fineness) stay valid for the current metal", () => {
+  it("changing horizon/range/granularity/currency while on Silver never sends a gold karat", () => {
+    // User had Gold+22K earlier; the karat state is stale. Now on Silver.
+    const stale = { unit: "kg", karat: "22k", fineness: "999" };
+    // Each control change re-runs load() -> sanitize; karat must be forced
+    // to silver's default and never sent as a gold karat.
+    const q = sanitizeQualityParams("silver", stale);
+    expect(q.karat).toBe("24k");
+    expect(q.unit).toBe("kg");
+    expect(q.fineness).toBe("999");
+  });
+
+  it("changing controls while on Gold never sends a silver fineness", () => {
+    const stale = { unit: "10gram", karat: "22k", fineness: "925" };
+    const q = sanitizeQualityParams("gold", stale);
+    expect(q.fineness).toBe("999");
+    expect(q.karat).toBe("22k"); // gold karat preserved
+    expect(q.unit).toBe("10gram");
+  });
+
+  it("stale fineness from a silver session is reset when switching to gold", () => {
+    const q = sanitizeQualityParams("gold", { unit: "10gram", karat: "24k", fineness: "958" });
+    expect(q.fineness).toBe("999");
+  });
+
+  it("invalid fineness on silver falls back to 999 default", () => {
+    const q = sanitizeQualityParams("silver", { unit: "kg", karat: "24k", fineness: "22k" });
+    expect(q.fineness).toBe("999");
+  });
+
+  it("metal switch + immediate control change in one interaction stays valid", () => {
+    // Real-user click pattern: switch to Silver AND change horizon before the
+    // next fetch. handleMetalChange resets quality defaults atomically; the
+    // subsequent load() re-sanitizes regardless of what state is present.
+    const defaults = QUALITY_DEFAULTS_BY_METAL["silver"];
+    const afterSwitch = sanitizeQualityParams("silver", {
+      unit: defaults.unit,
+      karat: "22k", // stale gold karat, still present mid-transition
+      fineness: "999",
+    });
+    expect(afterSwitch.karat).toBe("24k");
+    expect(afterSwitch.unit).toBe("kg");
+    expect(afterSwitch.fineness).toBe("999");
+  });
+
+  it("every karat in the gold selector and fineness in the silver selector is accepted", () => {
+    for (const k of KARATS_BY_GOLD) {
+      const q = sanitizeQualityParams("gold", { unit: "10gram", karat: k, fineness: "999" });
+      expect(q.karat).toBe(k);
+    }
+    for (const f of ["999", "958", "925"] as const) {
+      const q = sanitizeQualityParams("silver", { unit: "kg", karat: "24k", fineness: f });
+      expect(q.fineness).toBe(f);
     }
   });
 });

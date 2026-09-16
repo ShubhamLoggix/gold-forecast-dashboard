@@ -41,7 +41,11 @@ import {
   type Metal,
   type Unit,
 } from "./api";
-import { DEFAULT_UNIT_BY_METAL, UNITS_BY_METAL, sanitizeUnit } from "./metalUnits";
+import {
+  QUALITY_DEFAULTS_BY_METAL,
+  UNITS_BY_METAL,
+  sanitizeQualityParams,
+} from "./metalUnits";
 const GRANULARITIES: Granularity[] = ["day", "week", "month"];
 const RANGES: { label: string; days: number | null }[] = [
   { label: "1M", days: 21 },
@@ -229,11 +233,15 @@ export default function App() {
   const isSilver = metal === "silver";
   const units = UNITS_BY_METAL[metal];
 
-  // Atomic reset: switching metal sets THAT metal's own valid default unit in
-  // the same event — no post-render effect race with the fetch.
+  // Atomic reset: switching metal sets ALL metal-conditional params (unit,
+  // karat, fineness) to that metal's valid defaults in the same event —
+  // no post-render effect race with the fetch.
   const handleMetalChange = (m: Metal) => {
+    const defaults = QUALITY_DEFAULTS_BY_METAL[m];
     setMetal(m);
-    setUnit(DEFAULT_UNIT_BY_METAL[m]);
+    setUnit(defaults.unit);
+    setKarat(defaults.karat);
+    setFineness(defaults.fineness);
   };
   const unitLabel = isRetail
     ? `INR retail (Groww) — ${india?.city ?? city}, per ${unit === "10gram" ? "10g" : "g"} (${karat.toUpperCase()})`
@@ -252,9 +260,10 @@ export default function App() {
 
   const load = useCallback(async () => {
     if (isRetail) return; // retail mode fetches its own data
-    // Defensive: never fire an API call with a unit invalid for this metal
-    // (root-cause safety net for the 422 unit-mismatch bug).
-    const safeUnit = sanitizeUnit(metal, unit);
+    // Defensive: never fire an API call with a metal-conditional param
+    // (unit/karat/fineness) invalid for this metal — root-cause safety net
+    // covering ALL control changes, not just the metal switch.
+    const q = sanitizeQualityParams(metal, { unit, karat, fineness });
     setLoading(true);
     setError(null);
     try {
@@ -262,10 +271,10 @@ export default function App() {
       const params: Parameters<typeof fetchHistory>[0] = {
         granularity,
         currency,
-        karat,
-        unit: safeUnit,
+        karat: q.karat,
+        unit: q.unit,
         metal,
-        fineness,
+        fineness: q.fineness,
       };
       if (useCustom && customStart) params.start = customStart;
       if (useCustom && customEnd) params.end = customEnd;
@@ -277,7 +286,7 @@ export default function App() {
       }
       const [h, f, b, hl] = await Promise.all([
         fetchHistory(params),
-        fetchForecast(horizon, true, currency, karat, safeUnit, metal, fineness),
+        fetchForecast(horizon, true, currency, q.karat, q.unit, metal, q.fineness),
         fetchBacktest().catch(() => null),
         fetchHealth().catch(() => null),
       ]);
@@ -296,11 +305,11 @@ export default function App() {
     setIndiaLoading(true);
     setIndiaError(null);
     try {
-      // Retail is a gold-only view; sanitize the shared unit for gold.
-      const safeUnit = sanitizeUnit("gold", unit);
+      // Retail is a gold-only view; sanitize all quality params for gold.
+      const q = sanitizeQualityParams("gold", { unit, karat, fineness });
       const [rates, fc] = await Promise.all([
-        fetchIndiaRates(city, safeUnit),
-        fetchIndiaForecast(city, horizon, karat, safeUnit).catch(() => null),
+        fetchIndiaRates(city, q.unit),
+        fetchIndiaForecast(city, horizon, q.karat, q.unit).catch(() => null),
       ]);
       setIndia(rates);
       setIndiaForecast(fc);
