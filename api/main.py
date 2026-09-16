@@ -35,6 +35,7 @@ from api.schemas import (
     BacktestResponse,
     BacktestScoreEntry,
     BacktestScoreboard,
+    BandCalibration,
     BaselineSeries,
     ForecastResponse,
     HealthResponse,
@@ -275,6 +276,26 @@ def get_history(
     return cached
 
 
+def _band_scale(horizon_days: int) -> float | None:
+    """Calibrated band multiplier for a horizon, from the latest backtest that
+    computed one (None when no calibration data exists yet)."""
+    out_dir = Path(settings.data_dir) / "backtests"
+    for path in sorted(out_dir.glob("backtest_*.json"), reverse=True):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        for res in (payload.get("results") or {}).values():
+            if (
+                res.get("horizon_days") == horizon_days
+                and res.get("band_scale") is not None
+            ):
+                scale = float(res["band_scale"])
+                if scale > 0:
+                    return scale
+    return None
+
+
 def _forecast_response(
     horizon: str, quantiles: bool, currency: str = "usd", karat: str = "24k",
     unit: str = "10gram",
@@ -287,6 +308,15 @@ def _forecast_response(
     result = service.forecast(df, preset_days, quantiles=quantiles)
     naive = naive_last_value(df, preset_days)
     sma = simple_moving_average(df, preset_days)
+
+    band_calibration = None
+    scale = _band_scale(preset_days)
+    if scale and scale != 1.0:
+        result.q10 = result.point - scale * (result.point - result.q10)
+        result.q90 = result.point + scale * (result.q90 - result.point)
+        band_calibration = BandCalibration(
+            scale=round(scale, 3), target_coverage_pct=80.0
+        )
 
     rate_info = None
     point, q10, q50, q90 = (
@@ -328,6 +358,7 @@ def _forecast_response(
         karat=karat if currency == "inr" else None,  # type: ignore[arg-type]
         unit=unit if currency == "inr" else None,  # type: ignore[arg-type]
         rate=_rate_model(rate_info) if rate_info else None,
+        band_calibration=band_calibration,
     )
 
 
@@ -463,6 +494,7 @@ def _india_forecast_response(city: str, horizon: str, karat: str, unit: str) -> 
         karat=karat,  # type: ignore[arg-type]
         unit=unit,  # type: ignore[arg-type]
         rate=bullion.rate,
+        band_calibration=bullion.band_calibration,
         premium_ratio=ratio,
         bullion_history_last_close=bullion_value,
     )

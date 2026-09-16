@@ -40,6 +40,11 @@ export interface BaselineSeries {
   values: number[];
 }
 
+export interface BandCalibration {
+  scale: number;
+  target_coverage_pct: number;
+}
+
 export interface ForecastResponse {
   horizon: Horizon;
   horizon_days: number;
@@ -59,6 +64,7 @@ export interface ForecastResponse {
   karat: Karat | null;
   unit: Unit | null;
   rate: RateInfo | null;
+  band_calibration: BandCalibration | null;
 }
 
 export interface BacktestResponse {

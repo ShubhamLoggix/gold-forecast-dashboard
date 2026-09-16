@@ -97,6 +97,7 @@ class BacktestResult:
     step_days: int
     folds: list[BacktestFold]
     summary: dict[str, float]
+    band_scale: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -106,6 +107,7 @@ class BacktestResult:
             "step_days": self.step_days,
             "summary": self.summary,
             "folds": [dataclasses.asdict(f) for f in self.folds],
+            "band_scale": self.band_scale,
         }
 
 
@@ -360,6 +362,7 @@ class GoldForecastService:
         tm_folds: list[BacktestFold] = []
         nv_folds: list[BacktestFold] = []
         sma_folds: list[BacktestFold] = []
+        cal_samples: list[np.ndarray] = []
         t0 = time.perf_counter()
         for origin in origins:
             ctx = close[max(0, origin - self.context_length) : origin]
@@ -370,6 +373,8 @@ class GoldForecastService:
             tm_folds.append(
                 _fold_metrics(dates, origin, horizon_days, close[origin - 1], point, actual, q10, q90)
             )
+            half_width = np.maximum((q90 - q10) / 2.0, 1e-9)
+            cal_samples.append(np.abs(actual - point) / half_width)
             nv = naive_last_value(history.iloc[:origin], horizon_days)
             nv_folds.append(
                 _fold_metrics(dates, origin, horizon_days, close[origin - 1], nv, actual, nv, nv)
@@ -380,10 +385,27 @@ class GoldForecastService:
             )
         elapsed = time.perf_counter() - t0
 
+        # Band calibration: the multiplier k such that |actual - p50| fell
+        # inside k * (q90-q10)/2 for ~80% of historical out-of-sample points.
+        # Applying this factor to served bands makes "80% coverage" an honest
+        # statement (in-sample over the backtest folds used to fit it).
+        tm_result = _summarize(model_name, self.model_version, horizon_days, step_days, tm_folds)
+        if cal_samples:
+            pooled = np.concatenate(cal_samples)
+            band_scale = float(np.quantile(pooled, 0.8))
+            tm_result.band_scale = band_scale
+            tm_result.summary["calibrated_band_coverage_pct"] = float(
+                np.mean(np.concatenate(cal_samples) <= band_scale) * 100
+            )
+            logger.info(
+                "band calibration: horizon=%dd scale=%.3f (raw coverage %.1f%% -> ~%.0f%%)",
+                horizon_days,
+                band_scale,
+                tm_result.summary.get("band_coverage_pct", float("nan")),
+                tm_result.summary["calibrated_band_coverage_pct"],
+            )
         result = {
-            model_name: _summarize(
-                model_name, self.model_version, horizon_days, step_days, tm_folds
-            ),
+            model_name: tm_result,
             "naive-last-value": _summarize(
                 "naive-last-value", "-", horizon_days, step_days, nv_folds
             ),

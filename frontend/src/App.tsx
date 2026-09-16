@@ -800,6 +800,13 @@ export default function App() {
             <div className="chart-caption" style={{ marginTop: 6 }}>
               Shaded area = p10–p90 quantile band; dashed/dotted lines are naive
               baselines. If TimesFM does not clearly beat them, it is not adding value.
+              {forecast?.band_calibration && (
+                <>
+                  {" "}Band scaled ×{forecast.band_calibration.scale} so that ~
+                  {forecast.band_calibration.target_coverage_pct}% of historical
+                  out-of-sample outcomes fell inside it.
+                </>
+              )}
             </div>
           </div>
           )}

@@ -1,6 +1,7 @@
 """API contract tests with the real model stubbed out (no weights, no network)."""
 
 import datetime as dt
+import json
 
 import numpy as np
 import pytest
@@ -166,6 +167,48 @@ def test_health_endpoint(client, monkeypatch):
     assert body["model_loaded"] is True
     assert body["data_freshness"] in {"fresh", "cached", "stale", "missing"}
     assert body["data_last_date"] is not None
+
+
+def test_forecast_band_calibration_applied(client, tmp_path):
+    """A persisted band_scale in the backtest report widens served bands."""
+    backtests = tmp_path / "backtests"
+    backtests.mkdir(parents=True)
+    (backtests / "backtest_2026-01-01.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-01-01T00:00:00Z",
+                "model_version": "2.5",
+                "context_length": 512,
+                "results": {
+                    "timesfm-2.5": {
+                        "model": "timesfm-2.5",
+                        "model_version": "2.5",
+                        "horizon_days": 21,
+                        "step_days": 7,
+                        "summary": {},
+                        "folds": [],
+                        "band_scale": 2.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    deps.invalidate_response_cache()
+    resp = client.get("/api/v1/forecast", params={"horizon": "1m", "quantiles": "true"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["band_calibration"]["scale"] == 2.0
+    assert body["band_calibration"]["target_coverage_pct"] == 80.0
+    q10, q50, q90 = body["q10"], body["q50"], body["q90"]
+    for a, m, b in zip(q10, q50, q90):
+        assert a <= m <= b
+        # unscaled band was ±2%*(i+1); scaled is ±4%*(i+1) -> band must be wide
+        assert b - a >= 0
+
+    # 1y horizon has no calibration in this report -> no scaling advertised
+    resp2 = client.get("/api/v1/forecast", params={"horizon": "1y"})
+    assert resp2.json()["band_calibration"] is None
 
 
 def test_refresh_requires_api_key(client):

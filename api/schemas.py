@@ -106,6 +106,14 @@ class BaselineSeries(BaseModel):
     values: list[float]
 
 
+class BandCalibration(BaseModel):
+    """Band scaling so the p10–p90 band honestly covers ~80% of historical
+    out-of-sample outcomes (raw model bands are often too narrow)."""
+
+    scale: float
+    target_coverage_pct: float = 80.0
+
+
 class ForecastResponse(BaseModel):
     horizon: HorizonPreset
     horizon_days: int
@@ -125,6 +133,7 @@ class ForecastResponse(BaseModel):
     karat: Karat | None = None
     unit: Unit | None = None
     rate: RateInfo | None = None
+    band_calibration: BandCalibration | None = None
 
 
 class IndiaForecastResponse(ForecastResponse):
