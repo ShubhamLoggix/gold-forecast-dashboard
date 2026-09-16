@@ -42,7 +42,7 @@ def client(monkeypatch, tmp_path):
     service._model = StubModel()
     service._predict_fn = service._predict_2p5
 
-    monkeypatch.setattr(deps, "get_history", lambda: frame)
+    monkeypatch.setattr(deps, "get_history", lambda *a, **k: frame)
     monkeypatch.setattr(deps, "get_service", lambda: service)
     monkeypatch.setattr(settings, "api_key", "test-key")
     monkeypatch.setattr(deps, "bootstrap_if_needed", lambda: None)
@@ -264,3 +264,4 @@ def test_refresh_rate_limited(monkeypatch, client, tmp_path):
     assert resp1.json()["status"] == "ok"
     resp2 = client.post("/api/v1/refresh", headers={"X-API-Key": "test-key"})
     assert resp2.status_code == 429
+

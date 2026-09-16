@@ -28,6 +28,7 @@ import {
   type BacktestScoreboard,
   type BakeoffResponse,
   type Currency,
+  type Fineness,
   type ForecastResponse,
   type Granularity,
   type HealthResponse,
@@ -37,6 +38,7 @@ import {
   type IndiaForecastResponse,
   type IndiaRatesResponse,
   type Karat,
+  type Metal,
   type Unit,
 } from "./api";
 
@@ -50,8 +52,13 @@ const RANGES: { label: string; days: number | null }[] = [
 ];
 const HORIZONS: Horizon[] = ["1w", "1m", "3m", "6m", "1y"];
 const KARATS: Karat[] = ["24k", "22k", "18k"];
-const UNITS: { id: Unit; label: string }[] = [
+const FINENESSES: Fineness[] = ["999", "958", "925"];
+const GOLD_UNITS: { id: Unit; label: string }[] = [
   { id: "10gram", label: "per 10g" },
+  { id: "gram", label: "per g" },
+];
+const SILVER_UNITS: { id: Unit; label: string }[] = [
+  { id: "kg", label: "per kg" },
   { id: "gram", label: "per g" },
 ];
 
@@ -64,6 +71,12 @@ const INR_CAPTION =
 const RETAIL_FALLBACK_CITIES: IndiaCity[] = [
   { slug: "pune", name: "Pune", type: "city", state_name: "Maharashtra" },
 ];
+
+const silverInrCaption = (fineness: string, unit: string) =>
+  `Converted from COMEX SI=F silver futures at the live USD/INR rate — theoretical ` +
+  `bullion-equivalent at ${fineness} fineness, per ${unit === "kg" ? "kg" : "g"}. Retail ` +
+  `silver quotes (city-wise, per kg) are not integrated yet and would add dealer premium. ` +
+  `Historical points use each date's own USD/INR rate; the forecast uses the latest rate.`;
 
 const HORIZON_DAYS: Record<Horizon, number> = {
   "1w": 5,
@@ -194,7 +207,9 @@ export default function App() {
   const [rangeLabel, setRangeLabel] = useState("1Y");
   const [horizon, setHorizon] = useState<Horizon>("1m");
   const [currency, setCurrency] = useState<Currency>("usd");
+  const [metal, setMetal] = useState<Metal>("gold");
   const [karat, setKarat] = useState<Karat>("22k");
+  const [fineness, setFineness] = useState<Fineness>("999");
   const [unit, setUnit] = useState<Unit>("10gram");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
@@ -218,9 +233,20 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   const isInr = currency === "inr";
-  const isRetail = isInr && inrSource === "retail";
+  const isRetail = isInr && inrSource === "retail" && metal === "gold";
+  const isSilver = metal === "silver";
+  const units = isSilver ? SILVER_UNITS : GOLD_UNITS;
+  // Reset unit when switching metals (unit vocabularies differ).
+  useEffect(() => {
+    if (isSilver && unit === "10gram") setUnit("kg");
+    if (!isSilver && unit === "kg") setUnit("10gram");
+  }, [isSilver, unit]);
   const unitLabel = isRetail
     ? `INR retail (Groww) — ${india?.city ?? city}, per ${unit === "10gram" ? "10g" : "g"} (${karat.toUpperCase()})`
+    : isSilver
+    ? isInr
+      ? `INR per ${unit === "kg" ? "kg" : "g"} (${fineness} fineness, bullion-equiv.)`
+      : "USD/oz (COMEX SI=F)"
     : isInr
     ? `INR per ${unit === "10gram" ? "10g" : "g"} (${karat.toUpperCase()}, bullion-equiv.)`
     : "USD/oz (COMEX GC=F)";
@@ -241,6 +267,8 @@ export default function App() {
         currency,
         karat,
         unit,
+        metal,
+        fineness,
       };
       if (useCustom && customStart) params.start = customStart;
       if (useCustom && customEnd) params.end = customEnd;
@@ -252,7 +280,7 @@ export default function App() {
       }
       const [h, f, b, hl] = await Promise.all([
         fetchHistory(params),
-        fetchForecast(horizon, true, currency, karat, unit),
+        fetchForecast(horizon, true, currency, karat, unit, metal, fineness),
         fetchBacktest().catch(() => null),
         fetchHealth().catch(() => null),
       ]);
@@ -330,7 +358,11 @@ export default function App() {
     const a = document.createElement("a");
     const unitTag =
       forecast.currency === "inr"
-        ? forecast.unit === "gram" ? "per1g" : "per10g"
+        ? forecast.unit === "gram"
+          ? "per1g"
+          : forecast.unit === "kg"
+          ? "perkg"
+          : "per10g"
         : "peroz";
     a.download =
       `gold_forecast_${forecast.horizon}_${forecast.currency}` +
@@ -404,6 +436,20 @@ export default function App() {
 
       <div className="controls">
         <div className="control-group">
+          <label>Metal</label>
+          <div className="seg">
+            {(["gold", "silver"] as Metal[]).map((m) => (
+              <button
+                key={m}
+                className={metal === m ? "active" : ""}
+                onClick={() => setMetal(m)}
+              >
+                {m === "gold" ? "Gold" : "Silver"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="control-group">
           <label>Currency</label>
           <div className="seg">
             {(["usd", "inr"] as Currency[]).map((c) => (
@@ -419,20 +465,22 @@ export default function App() {
         </div>
         {isInr && (
           <>
-            <div className="control-group">
-              <label>Source</label>
-              <div className="seg">
-                {(["bullion", "retail"] as const).map((s) => (
-                  <button
-                    key={s}
-                    className={inrSource === s ? "active" : ""}
-                    onClick={() => setInrSource(s)}
-                  >
-                    {s === "bullion" ? "Bullion (COMEX)" : "Retail (Groww)"}
-                  </button>
-                ))}
+            {metal === "gold" && (
+              <div className="control-group">
+                <label>Source</label>
+                <div className="seg">
+                  {(["bullion", "retail"] as const).map((s) => (
+                    <button
+                      key={s}
+                      className={inrSource === s ? "active" : ""}
+                      onClick={() => setInrSource(s)}
+                    >
+                      {s === "bullion" ? "Bullion (COMEX)" : "Retail (Groww)"}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
             {isRetail && (
               <div className="control-group">
                 <label>City</label>
@@ -449,24 +497,42 @@ export default function App() {
                 </select>
               </div>
             )}
-            <div className="control-group">
-              <label>Karat</label>
-              <div className="seg">
-                {KARATS.map((k) => (
-                  <button
-                    key={k}
-                    className={karat === k ? "active" : ""}
-                    onClick={() => setKarat(k)}
-                  >
-                    {k.toUpperCase()}
-                  </button>
-                ))}
+            {metal === "gold" && (
+              <div className="control-group">
+                <label>Karat</label>
+                <div className="seg">
+                  {KARATS.map((k) => (
+                    <button
+                      key={k}
+                      className={karat === k ? "active" : ""}
+                      onClick={() => setKarat(k)}
+                    >
+                      {k.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
+            {isSilver && (
+              <div className="control-group">
+                <label>Fineness</label>
+                <div className="seg">
+                  {FINENESSES.map((f) => (
+                    <button
+                      key={f}
+                      className={fineness === f ? "active" : ""}
+                      onClick={() => setFineness(f)}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="control-group">
               <label>Unit</label>
               <div className="seg">
-                {UNITS.map((u) => (
+                {units.map((u) => (
                   <button
                     key={u.id}
                     className={unit === u.id ? "active" : ""}
@@ -617,7 +683,15 @@ export default function App() {
           {!isRetail && (
           <div className="metrics">
             <Metric
-              label={isInr ? `Last close (${karat.toUpperCase()}, per ${unit === "10gram" ? "10g" : "g"})` : "Last close (GC=F)"}
+              label={
+                isRetail
+                  ? "Retail quotes (per 10g)"
+                  : isSilver
+                  ? `Last close (${fineness}, per ${unit === "kg" ? "kg" : "g"})`
+                  : isInr
+                  ? `Last close (${karat.toUpperCase()}, per ${unit === "10gram" ? "10g" : "g"})`
+                  : "Last close (GC=F)"
+              }
               value={lastClose != null ? formatValue(lastClose) : "—"}
             />
             <Metric
@@ -795,7 +869,7 @@ export default function App() {
             </div>
             {isInr && (
               <div className="chart-caption" data-testid="inr-disclaimer" style={{ marginTop: 6 }}>
-                {INR_CAPTION}
+                {isSilver ? silverInrCaption(fineness, unit) : INR_CAPTION}
                 {forecast?.rate && (
                   <>
                     {" "}Converted at ₹{forecast.rate.usd_inr_rate.toFixed(4)}/USD as of{" "}
@@ -960,7 +1034,8 @@ export default function App() {
                 Measured on real out-of-sample data (walk-forward backtest; each fold
                 forecasts a period the model never saw). MAPE = average % error.
                 Band honesty = how often the actual price stayed inside the shaded
-                p10–p90 band — ≈80% means the band is trustworthy.{" "}
+                p10–p90 band — ≈80% means the band is trustworthy.
+                {isSilver && " These scores were measured on gold — silver uses the same model zero-shot."}{" "}
                 <strong>
                   No forecast can be 99% accurate — treat every point value as a
                   scenario, not a promise.

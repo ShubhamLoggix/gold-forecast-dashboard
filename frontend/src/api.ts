@@ -5,7 +5,9 @@ export type Granularity = "day" | "week" | "month";
 export type Horizon = "1w" | "1m" | "3m" | "6m" | "1y";
 export type Currency = "usd" | "inr";
 export type Karat = "24k" | "22k" | "18k";
-export type Unit = "gram" | "10gram";
+export type Unit = "gram" | "10gram" | "kg";
+export type Metal = "gold" | "silver";
+export type Fineness = "999" | "958" | "925";
 
 export interface RateInfo {
   usd_inr_rate: number;
@@ -30,7 +32,9 @@ export interface HistoryResponse {
   source: string;
   points: OhlcPoint[];
   currency: Currency;
+  metal: Metal;
   karat: Karat | null;
+  fineness: Fineness | null;
   unit: Unit | null;
   rate: RateInfo | null;
 }
@@ -61,7 +65,9 @@ export interface ForecastResponse {
   quantiles: boolean;
   baselines: BaselineSeries[];
   currency: Currency;
+  metal: Metal;
   karat: Karat | null;
+  fineness: Fineness | null;
   unit: Unit | null;
   rate: RateInfo | null;
   band_calibration: BandCalibration | null;
@@ -136,6 +142,8 @@ export const fetchHistory = (params: {
   currency?: Currency;
   karat?: Karat;
   unit?: Unit;
+  metal?: Metal;
+  fineness?: Fineness;
 }) => {
   const q = new URLSearchParams();
   if (params.start) q.set("start", params.start);
@@ -144,6 +152,8 @@ export const fetchHistory = (params: {
   if (params.currency) q.set("currency", params.currency);
   if (params.karat) q.set("karat", params.karat);
   if (params.unit) q.set("unit", params.unit);
+  if (params.metal) q.set("metal", params.metal);
+  if (params.fineness) q.set("fineness", params.fineness);
   return request<HistoryResponse>(`/api/v1/history?${q.toString()}`);
 };
 
@@ -153,10 +163,13 @@ export const fetchForecast = (
   currency: Currency = "usd",
   karat: Karat = "24k",
   unit: Unit = "10gram",
+  metal: Metal = "gold",
+  fineness: Fineness = "999",
 ) =>
   request<ForecastResponse>(
     `/api/v1/forecast?horizon=${horizon}&quantiles=${quantiles}` +
-      `&currency=${currency}&karat=${karat}&unit=${unit}`,
+      `&currency=${currency}&karat=${karat}&unit=${unit}` +
+      `&metal=${metal}&fineness=${fineness}`,
   );
 
 export const fetchBacktest = () =>

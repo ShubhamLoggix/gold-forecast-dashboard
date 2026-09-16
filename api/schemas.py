@@ -11,7 +11,9 @@ Granularity = Literal["day", "week", "month"]
 HorizonPreset = Literal["1w", "1m", "3m", "6m", "1y"]
 Currency = Literal["usd", "inr"]
 Karat = Literal["24k", "22k", "18k"]
-Unit = Literal["gram", "10gram"]
+Unit = Literal["gram", "10gram", "kg"]
+Metal = Literal["gold", "silver"]
+Fineness = Literal["999", "958", "925"]
 
 
 class OhlcPoint(BaseModel):
@@ -97,7 +99,9 @@ class HistoryResponse(BaseModel):
     source: str
     points: list[OhlcPoint]
     currency: Currency = "usd"
+    metal: Metal = "gold"
     karat: Karat | None = None
+    fineness: Fineness | None = None
     unit: Unit | None = None
     rate: RateInfo | None = None
 
@@ -131,7 +135,9 @@ class ForecastResponse(BaseModel):
     quantiles: bool
     baselines: list[BaselineSeries]
     currency: Currency = "usd"
+    metal: Metal = "gold"
     karat: Karat | None = None
+    fineness: Fineness | None = None
     unit: Unit | None = None
     rate: RateInfo | None = None
     band_calibration: BandCalibration | None = None

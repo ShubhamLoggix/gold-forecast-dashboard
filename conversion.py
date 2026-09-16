@@ -26,6 +26,48 @@ UNIT_FACTORS: dict[str, float] = {
 SUPPORTED_KARATS = tuple(PURITY_FACTORS)
 SUPPORTED_UNITS = tuple(UNIT_FACTORS)
 
+# Silver uses FINENESS, not karats: 999 (fine silver, .999 pure),
+# 958 (Britannia standard), 925 (sterling). Retail silver in India is quoted
+# per kilogram or per gram of finished product.
+SILVER_FINENESS: dict[str, float] = {
+    "999": 0.999,
+    "958": 0.958,
+    "925": 0.925,
+}
+SILVER_UNIT_FACTORS: dict[str, float] = {
+    "gram": 1.0,
+    "kg": 1000.0,
+}
+SUPPORTED_SILVER_FINENESS = tuple(SILVER_FINENESS)
+SUPPORTED_SILVER_UNITS = tuple(SILVER_UNIT_FACTORS)
+
+
+def convert_silver_series(
+    values: "list[float] | object",  # numpy array or list
+    usd_inr_rate: float,
+    fineness: str,
+    unit: str = "kg",
+):
+    """Vectorised USD/oz -> INR per unit for silver at the given fineness.
+
+    Honesty note: this is the bullion-equivalent value (SI=F is ~99.9% pure
+    silver); retail silver quotes add dealer premium and making charges.
+    """
+    import numpy as np
+
+    try:
+        purity = SILVER_FINENESS[fineness.lower()]
+    except KeyError as exc:
+        raise ValueError(f"unsupported silver fineness: {fineness!r}") from exc
+    try:
+        unit_factor = SILVER_UNIT_FACTORS[unit.lower()]
+    except KeyError as exc:
+        raise ValueError(f"unsupported silver unit: {unit!r}") from exc
+    if usd_inr_rate <= 0:
+        raise ValueError("usd_inr_rate must be positive")
+    arr = np.asarray(values, dtype=float)
+    return arr * usd_inr_rate / TROY_OZ_TO_GRAM * purity * unit_factor
+
 
 def usd_per_troy_oz_to_inr_per_gram(
     usd_price: float, usd_inr_rate: float, karat: str

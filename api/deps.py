@@ -30,7 +30,11 @@ _bootstrap_thread: threading.Thread | None = None
 _bootstrap_error: str | None = None
 
 
-def get_history() -> pd.DataFrame:
+def get_history(metal: str = "gold") -> pd.DataFrame:
+    if metal == "silver":
+        from ingestion.fetch_silver_prices import load_canonical as load_silver
+
+        return load_silver()
     return load_canonical()
 
 
@@ -86,6 +90,19 @@ def _bootstrap() -> None:
             update_canonical(
                 dt.date.fromisoformat(settings.history_start), dt.date.today()
             )
+        try:
+            from ingestion.fetch_silver_prices import load_canonical as load_silver
+
+            load_silver()
+        except FileNotFoundError:
+            try:
+                from ingestion.fetch_silver_prices import update_canonical as update_silver
+
+                update_silver(
+                    dt.date.fromisoformat(settings.history_start), dt.date.today()
+                )
+            except Exception as ag_exc:  # noqa: BLE001 - gold view must not depend on silver
+                logger.warning("Silver seeding failed: %s", ag_exc)
         # FX series for the INR view. Full-window request is cache-aware:
         # covered caches are skipped, short ones are self-healed.
         try:

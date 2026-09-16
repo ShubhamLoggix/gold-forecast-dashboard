@@ -51,7 +51,7 @@ def inr_client(monkeypatch, tmp_path):
     service = main_mod.GoldForecastService(model_version="2.5")
     service._model = StubModel()
     service._predict_fn = service._predict_2p5
-    monkeypatch.setattr(deps, "get_history", lambda: frame)
+    monkeypatch.setattr(deps, "get_history", lambda *a, **k: frame)
     monkeypatch.setattr(deps, "get_service", lambda: service)
     monkeypatch.setattr(deps, "service_is_loaded", lambda: True)
     monkeypatch.setattr(deps, "bootstrap_error", lambda: None)
@@ -140,3 +140,4 @@ def test_missing_fx_series_503(monkeypatch, inr_client, tmp_path):
     resp = inr_client.get("/api/v1/history", params={"currency": "inr"})
     assert resp.status_code == 503
     assert "USDINR" in resp.json()["error"]["message"]
+

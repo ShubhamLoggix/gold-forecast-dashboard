@@ -171,7 +171,7 @@ def test_india_api_endpoints(stub_groww, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "data_dir", tmp_path)
 
     service = main_mod.GoldForecastService(model_version="2.5")
-    monkeypatch.setattr(deps, "get_history", lambda: frame)
+    monkeypatch.setattr(deps, "get_history", lambda *a, **k: frame)
     monkeypatch.setattr(deps, "get_service", lambda: service)
     monkeypatch.setattr(settings, "api_key", "test-key")
     monkeypatch.setattr(deps, "bootstrap_if_needed", lambda: None)
@@ -220,7 +220,7 @@ def test_india_forecast_endpoint(stub_groww, monkeypatch, tmp_path):
     service = main_mod.GoldForecastService(model_version="2.5")
     service._model = StubModel()
     service._predict_fn = service._predict_2p5
-    monkeypatch.setattr(deps, "get_history", lambda: frame)
+    monkeypatch.setattr(deps, "get_history", lambda *a, **k: frame)
     monkeypatch.setattr(deps, "get_service", lambda: service)
     monkeypatch.setattr(settings, "api_key", "test-key")
     monkeypatch.setattr(deps, "bootstrap_if_needed", lambda: None)
@@ -244,3 +244,4 @@ def test_india_forecast_endpoint(stub_groww, monkeypatch, tmp_path):
 
         missing = client.get("/api/v1/india/forecast", params={"city": "atlantis"})
         assert missing.status_code == 404
+

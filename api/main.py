@@ -52,7 +52,13 @@ from api.schemas import (
     RefreshResponse,
 )
 from config import settings
-from conversion import PURITY_FACTORS, TROY_OZ_TO_GRAM, UNIT_FACTORS, convert_series
+from conversion import (
+    PURITY_FACTORS,
+    TROY_OZ_TO_GRAM,
+    UNIT_FACTORS,
+    convert_silver_series,
+    convert_series,
+)
 from forecasting.baselines import naive_last_value, simple_moving_average
 from forecasting.timesfm_service import HORIZON_PRESETS, GoldForecastService
 from ingestion.aggregate import aggregate_history
@@ -198,6 +204,29 @@ def _convert_values(values, rate: float, karat: str, unit: str):
     return convert_series(values, rate, karat, unit).tolist()
 
 
+def _validate_quality(metal: str, karat: str, fineness: str, unit: str) -> tuple[str, str, str]:
+    """Unit/fineness validation across metals (raises 422 on bad combos)."""
+    if metal == "silver":
+        if unit not in ("kg", "gram"):
+            raise HTTPException(
+                status_code=422, detail="unit must be 'kg' or 'gram' for silver"
+            )
+        if karat != "24k":  # karat is gold-only; reject non-default usage
+            raise HTTPException(
+                status_code=422, detail="karat applies to gold only — use fineness for silver"
+            )
+        return "", fineness, unit
+    if unit not in ("gram", "10gram"):
+        raise HTTPException(
+            status_code=422, detail="unit must be 'gram' or '10gram' for gold"
+        )
+    if fineness != "999":
+        raise HTTPException(
+            status_code=422, detail="fineness applies to silver only — use karat for gold"
+        )
+    return karat, "", unit
+
+
 def _history_response(
     start: dt.date | None,
     end: dt.date | None,
@@ -205,8 +234,11 @@ def _history_response(
     currency: str = "usd",
     karat: str = "24k",
     unit: str = "10gram",
+    metal: str = "gold",
+    fineness: str = "999",
 ) -> HistoryResponse:
-    df = deps.get_history()
+    karat, fineness, unit = _validate_quality(metal, karat, fineness, unit)
+    df = deps.get_history(metal)
     if start is not None:
         df = df[df["date"] >= pd.Timestamp(start)]
     if end is not None:
@@ -225,12 +257,22 @@ def _history_response(
 
         rate_info = _resolve_rate_info(reference_date=pd.Timestamp(df["date"].iloc[-1]).date())
         fx = rate_frame_for_dates(agg["date"])
-        factor = (
-            fx["usd_inr_rate"].astype(float)
-            / TROY_OZ_TO_GRAM
-            * PURITY_FACTORS[karat]
-            * UNIT_FACTORS[unit]
-        ).to_numpy()
+        if metal == "silver":
+            from conversion import SILVER_FINENESS, SILVER_UNIT_FACTORS
+
+            factor = (
+                fx["usd_inr_rate"].astype(float)
+                / TROY_OZ_TO_GRAM
+                * SILVER_FINENESS[fineness]
+                * SILVER_UNIT_FACTORS[unit]
+            ).to_numpy()
+        else:
+            factor = (
+                fx["usd_inr_rate"].astype(float)
+                / TROY_OZ_TO_GRAM
+                * PURITY_FACTORS[karat]
+                * UNIT_FACTORS[unit]
+            ).to_numpy()
         for col in ("open", "high", "low", "close"):
             agg[col] = agg[col].astype(float) * factor
         # volume is unit-agnostic and stays untouched
@@ -253,7 +295,9 @@ def _history_response(
         source=str(df["source"].iloc[-1]),
         points=points,
         currency=currency,  # type: ignore[arg-type]
-        karat=karat if currency == "inr" else None,  # type: ignore[arg-type]
+        metal=metal,  # type: ignore[arg-type]
+        karat=karat if (currency == "inr" and metal == "gold") else None,  # type: ignore[arg-type]
+        fineness=fineness if (currency == "inr" and metal == "silver") else None,  # type: ignore[arg-type]
         unit=unit if currency == "inr" else None,  # type: ignore[arg-type]
         rate=_rate_model(rate_info) if rate_info else None,
     )
@@ -266,14 +310,18 @@ def get_history(
     granularity: str = Query(default="day", pattern="^(day|week|month)$"),
     currency: str = Query(default="usd", pattern="^(usd|inr)$"),
     karat: str = Query(default="24k", pattern="^(24k|22k|18k)$"),
-    unit: str = Query(default="10gram", pattern="^(gram|10gram)$"),
+    unit: str = Query(default="10gram", pattern="^(gram|10gram|kg)$"),
+    metal: str = Query(default="gold", pattern="^(gold|silver)$"),
+    fineness: str = Query(default="999", pattern="^(999|958|925)$"),
     request: Request = None,  # type: ignore[assignment]
 ):
     _rate_limit_public(request, "history")
-    key = ("history", start, end, granularity, currency, karat, unit)
+    key = ("history", start, end, granularity, currency, karat, unit, metal, fineness)
     cached = deps.cache_get(key)
     if cached is None:
-        cached = _history_response(start, end, granularity, currency, karat, unit)
+        cached = _history_response(
+            start, end, granularity, currency, karat, unit, metal, fineness
+        )
         deps.cache_set(key, cached)
     return cached
 
@@ -300,13 +348,14 @@ def _band_scale(horizon_days: int) -> float | None:
 
 def _forecast_response(
     horizon: str, quantiles: bool, currency: str = "usd", karat: str = "24k",
-    unit: str = "10gram",
+    unit: str = "10gram", metal: str = "gold", fineness: str = "999",
 ) -> ForecastResponse:
     import datetime as dt_
 
+    karat, fineness, unit = _validate_quality(metal, karat, fineness, unit)
     preset_days = HORIZON_PRESETS[horizon]
     service = deps.get_service()
-    df = deps.get_history()
+    df = deps.get_history(metal)
     result = service.forecast(df, preset_days, quantiles=quantiles)
     naive = naive_last_value(df, preset_days)
     sma = simple_moving_average(df, preset_days)
@@ -327,15 +376,30 @@ def _forecast_response(
     if currency == "inr":
         rate_info = _resolve_rate_info(reference_date=result.history_last_date)
         rate = rate_info["rate"]
-        point = convert_series(point, rate, karat, unit)
-        q10 = convert_series(q10, rate, karat, unit)
-        q50 = convert_series(q50, rate, karat, unit)
-        q90 = convert_series(q90, rate, karat, unit)
-        naive = convert_series(naive, rate, karat, unit)
-        sma = convert_series(sma, rate, karat, unit)
-        history_last_close = float(result.last_close * rate
-                                    / TROY_OZ_TO_GRAM * PURITY_FACTORS[karat]
-                                    * UNIT_FACTORS[unit])
+        if metal == "silver":
+            from conversion import SILVER_FINENESS, SILVER_UNIT_FACTORS
+
+            def _conv(values):
+                return convert_silver_series(values, rate, fineness, unit)
+
+            history_last_close = float(
+                result.last_close * rate
+                / TROY_OZ_TO_GRAM * SILVER_FINENESS[fineness]
+                * SILVER_UNIT_FACTORS[unit]
+            )
+        else:
+            def _conv(values):
+                return convert_series(values, rate, karat, unit)
+
+            history_last_close = float(result.last_close * rate
+                                        / TROY_OZ_TO_GRAM * PURITY_FACTORS[karat]
+                                        * UNIT_FACTORS[unit])
+        point = _conv(point)
+        q10 = _conv(q10)
+        q50 = _conv(q50)
+        q90 = _conv(q90)
+        naive = _conv(naive)
+        sma = _conv(sma)
     else:
         history_last_close = result.last_close
     return ForecastResponse(
@@ -357,7 +421,9 @@ def _forecast_response(
             BaselineSeries(name="sma-20", values=sma.tolist()),
         ],
         currency=currency,  # type: ignore[arg-type]
-        karat=karat if currency == "inr" else None,  # type: ignore[arg-type]
+        metal=metal,  # type: ignore[arg-type]
+        karat=karat if (currency == "inr" and metal == "gold") else None,  # type: ignore[arg-type]
+        fineness=fineness if (currency == "inr" and metal == "silver") else None,  # type: ignore[arg-type]
         unit=unit if currency == "inr" else None,  # type: ignore[arg-type]
         rate=_rate_model(rate_info) if rate_info else None,
         band_calibration=band_calibration,
@@ -370,14 +436,19 @@ def get_forecast(
     quantiles: bool = Query(default=True),
     currency: str = Query(default="usd", pattern="^(usd|inr)$"),
     karat: str = Query(default="24k", pattern="^(24k|22k|18k)$"),
-    unit: str = Query(default="10gram", pattern="^(gram|10gram)$"),
+    unit: str = Query(default="10gram", pattern="^(gram|10gram|kg)$"),
+    metal: str = Query(default="gold", pattern="^(gold|silver)$"),
+    fineness: str = Query(default="999", pattern="^(999|958|925)$"),
     request: Request = None,  # type: ignore[assignment]
 ):
     _rate_limit_public(request, "forecast")
-    key = ("forecast", horizon, quantiles, settings.model_version, currency, karat, unit)
+    key = ("forecast", horizon, quantiles, settings.model_version, currency,
+           karat, unit, metal, fineness)
     cached = deps.cache_get(key)
     if cached is None:
-        cached = _forecast_response(horizon, quantiles, currency, karat, unit)
+        cached = _forecast_response(
+            horizon, quantiles, currency, karat, unit, metal, fineness
+        )
         deps.cache_set(key, cached)
     return cached
 

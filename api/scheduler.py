@@ -86,6 +86,15 @@ def daily_refresh_job() -> None:
             dt.date.fromisoformat(settings.history_start), dt.date.today(),
             force_refresh=False,
         )
+        # Silver runs through the same daily top-up.
+        try:
+            from ingestion.fetch_silver_prices import update_canonical as update_silver
+
+            update_silver(
+                dt.date.fromisoformat(settings.history_start), dt.date.today()
+            )
+        except Exception as ag_exc:  # noqa: BLE001 - silver is auxiliary
+            logger.warning("Silver refresh failed: %s", ag_exc)
         # Refresh the USD/INR FX series on the same schedule. The fetch is
         # cache-aware: requesting the full window is a no-op when the cache
         # already covers it, and self-heals when the cache is short.

@@ -102,7 +102,7 @@ def test_health_reports_drift_flag(monkeypatch, tmp_path):
     service = main_mod.GoldForecastService(model_version="2.5")
     service._model = StubModel()
     service._predict_fn = service._predict_2p5
-    monkeypatch.setattr(deps, "get_history", lambda: frame)
+    monkeypatch.setattr(deps, "get_history", lambda *a, **k: frame)
     monkeypatch.setattr(deps, "get_service", lambda: service)
     monkeypatch.setattr(deps, "bootstrap_error", lambda: None)
     deps.invalidate_response_cache()
@@ -120,7 +120,7 @@ def test_health_does_not_trigger_model_load(monkeypatch, tmp_path):
     processed.mkdir(parents=True)
     frame.to_parquet(processed / "gold_prices_daily.parquet", index=False)
     monkeypatch.setattr(settings, "data_dir", tmp_path)
-    monkeypatch.setattr(deps, "get_history", lambda: frame)
+    monkeypatch.setattr(deps, "get_history", lambda *a, **k: frame)
     monkeypatch.setattr(deps, "bootstrap_error", lambda: None)
     deps.invalidate_response_cache()
 
@@ -142,7 +142,7 @@ def test_public_rate_limit_429(monkeypatch, tmp_path):
     processed.mkdir(parents=True)
     frame.to_parquet(processed / "gold_prices_daily.parquet", index=False)
     monkeypatch.setattr(settings, "data_dir", tmp_path)
-    monkeypatch.setattr(deps, "get_history", lambda: frame)
+    monkeypatch.setattr(deps, "get_history", lambda *a, **k: frame)
     # Tight limiter to keep the test fast.
     monkeypatch.setattr(
         main_mod, "public_rate_limiter",
@@ -166,3 +166,4 @@ def test_oversized_body_rejected():
         )
     assert resp.status_code == 413
     assert resp.json()["error"]["code"] == "payload_too_large"
+
