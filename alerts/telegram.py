@@ -118,12 +118,22 @@ def remove_target(target_id: str, data_dir: Path | None = None) -> bool:
 # Evaluation
 # --------------------------------------------------------------------------- #
 def _current_value(target: dict, history: pd.DataFrame, usd_inr_rate: float) -> float:
-    from conversion import convert_series
-
+    """The price an alert watches. INR targets watch the Groww RETAIL quote for
+    the digest city (what you'd actually pay in a shop); falls back to the
+    bullion-equivalent conversion if the retail source is unavailable."""
     close = float(history["close"].iloc[-1])
     if target["currency"] == "usd":
         return close  # native series is USD per troy oz
-    return float(convert_series(close, usd_inr_rate, target["karat"], target["unit"]))
+    unit_factor = 10 if target["unit"] == "10gram" else 1
+    try:
+        from ingestion.india_rates import get_city_rates
+
+        retail = get_city_rates(settings.digest_city)
+        return float(retail["per_gram"][target["karat"]]) * unit_factor
+    except Exception:  # noqa: BLE001 - retail unavailable -> bullion fallback
+        from conversion import convert_series
+
+        return float(convert_series(close, usd_inr_rate, target["karat"], target["unit"]))
 
 
 def evaluate_targets(history: pd.DataFrame, usd_inr_rate: float, data_dir: Path | None = None) -> list[dict]:
@@ -162,12 +172,20 @@ def evaluate_targets(history: pd.DataFrame, usd_inr_rate: float, data_dir: Path 
 
 def _target_message(target: dict) -> str:
     side = "dropped to" if target["op"] == "<=" else "rose to"
-    karat = target["karat"].upper() if target["currency"] == "inr" else "GC=F"
-    unit = target["unit"].replace("gram", "g") if target["currency"] == "inr" else "per oz"
+    if target["currency"] == "inr":
+        karat = f"{target['karat'].upper()} retail ({settings.digest_city.title()})"
+        unit = f"per {target['unit'].replace('gram', 'g')}"
+        amount = f"Rs {_inr(target['triggered_value'])}"
+    else:
+        karat = "COMEX GC=F"
+        unit = "per oz"
+        amount = f"${target['triggered_value']:,.2f}"
     return (
         f"GOLD ALERT\n"
-        f"{karat} {side} {target['triggered_value']:,.2f} {unit}\n"
-        f"(you asked for {'<=' if target['op'] == '<=' else '>='} {target['price']:,.2f})\n"
+        f"{karat} {side} {amount} {unit}\n"
+        f"(you asked for {'<=' if target['op'] == '<=' else '>='} "
+        + (_inr(target["price"]) if target["currency"] == "inr" else f"{target['price']:,.2f}")
+        + ")\n"
         + (f"\nDashboard: {settings.dashboard_url}" if settings.dashboard_url else "")
     )
 

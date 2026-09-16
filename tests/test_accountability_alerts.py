@@ -90,10 +90,15 @@ def test_alert_targets_crud(isolated_settings):
 
 
 def test_evaluate_targets_triggers_once(isolated_settings, monkeypatch):
+    import ingestion.india_rates as ir
     from alerts import telegram as tg
 
     sent: list[str] = []
     monkeypatch.setattr(tg, "send_message", lambda text: sent.append(text) or True)
+    # Retail source unavailable in tests -> INR targets fall back to bullion.
+    monkeypatch.setattr(
+        ir, "get_city_rates", lambda city, **k: (_ for _ in ()).throw(FileNotFoundError)
+    )
 
     history = make_history(n=30, base=2000.0)  # closes near 2000 USD/oz
     t_low = tg.add_target("22k", "10gram", "inr", "<=", 1000, data_dir=isolated_settings.data_dir)
@@ -106,6 +111,31 @@ def test_evaluate_targets_triggers_once(isolated_settings, monkeypatch):
     hit2 = tg.evaluate_targets(history, rate, data_dir=isolated_settings.data_dir)
     assert t_high["id"] not in {h["id"] for h in hit2}
     assert len(sent) == 1
+
+
+def test_evaluate_targets_uses_retail_for_inr(isolated_settings, monkeypatch):
+    import ingestion.india_rates as ir
+    from alerts import telegram as tg
+
+    sent: list[str] = []
+    monkeypatch.setattr(tg, "send_message", lambda text: sent.append(text) or True)
+    monkeypatch.setattr(
+        ir, "get_city_rates",
+        lambda city, **k: {"per_gram": {"24k": 15317.0, "22k": 14041.0, "18k": 11488.0}},
+    )
+
+    history = make_history(n=30, base=2000.0)
+    # Bullion-equiv 22K/10g at rate 83 would be ~1,520,000 -> would fire a
+    # ">=" target, but the RETAIL quote (1,40,410) governs INR alerts.
+    t = tg.add_target("22k", "10gram", "inr", ">=", 145000, data_dir=isolated_settings.data_dir)
+    hit = tg.evaluate_targets(history, 83.0, data_dir=isolated_settings.data_dir)
+    assert [h["id"] for h in hit] == []  # retail 1,40,410 < 1,45,000 -> no fire
+
+    t2 = tg.add_target("22k", "10gram", "inr", "<=", 145000, data_dir=isolated_settings.data_dir)
+    hit2 = tg.evaluate_targets(history, 83.0, data_dir=isolated_settings.data_dir)
+    assert {h["id"] for h in hit2} == {t2["id"]}
+    assert "22K retail (Pune)" in sent[-1]
+    assert "per 10g" in sent[-1]
 
 
 def test_daily_digest_template(isolated_settings, monkeypatch):
