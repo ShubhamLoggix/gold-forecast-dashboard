@@ -204,3 +204,5 @@ Carbon emissions can be estimated using the [Machine Learning Impact calculator]
 ### Framework versions
 
 - PEFT 0.21.0
+---
+How to regenerate: run `python scripts/finetune_experiment.py` (~2.5 h on CPU; adapter saved here automatically). See the negative-result write-up in LIMITATIONS.md.

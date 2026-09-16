@@ -19,3 +19,8 @@ data/backtests/backtest_*.json
 *.log
 .DS_Store
 data/backtests/bakeoff_*.json
+data/models/**/model*.safetensors
+data/models/**/*.bin
+data/models/**/optimizer*
+data/models/**/scheduler*
+data/models/**/checkpoint-*/
