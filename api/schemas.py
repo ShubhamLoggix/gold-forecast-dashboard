@@ -185,6 +185,24 @@ class BacktestScoreboard(BaseModel):
     entries: list[BacktestScoreEntry]
 
 
+class BakeoffEntry(BaseModel):
+    horizon_days: int
+    horizon_label: str
+    model: str
+    mape_pct: float
+    directional_accuracy_pct: float
+    band_coverage_pct: float
+    calibrated_band_coverage_pct: float | None = None
+    band_scale: float | None = None
+    n_folds: int
+
+
+class BakeoffResponse(BaseModel):
+    generated_at: dt.datetime
+    data_range: list[str]
+    entries: list[BakeoffEntry]
+
+
 class HealthResponse(BaseModel):
     status: str
     model_loaded: bool

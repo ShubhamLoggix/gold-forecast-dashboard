@@ -35,6 +35,8 @@ from api.schemas import (
     BacktestResponse,
     BacktestScoreEntry,
     BacktestScoreboard,
+    BakeoffEntry,
+    BakeoffResponse,
     BandCalibration,
     BaselineSeries,
     ForecastResponse,
@@ -601,6 +603,25 @@ def backtest_scoreboard(request: Request = None):  # type: ignore[assignment]
         )
     entries.sort(key=lambda e: e.horizon_days)
     return BacktestScoreboard(entries=entries)
+
+
+@app.get("/api/v1/backtest/bakeoff", response_model=BakeoffResponse, tags=["backtest"])
+def backtest_bakeoff(request: Request = None):  # type: ignore[assignment]
+    """Multi-model leaderboard: TimesFM vs Chronos vs naive vs SMA."""
+    _rate_limit_public(request, "bakeoff")
+    out_dir = Path(settings.data_dir) / "backtests"
+    files = sorted(out_dir.glob("bakeoff_*.json"), reverse=True)
+    if not files:
+        raise HTTPException(
+            status_code=404,
+            detail="No bake-off report found. Run scripts/model_bakeoff.py first.",
+        )
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
+    return BakeoffResponse(
+        generated_at=dt.datetime.fromisoformat(payload["generated_at"]),
+        data_range=payload["data_range"],
+        entries=[BakeoffEntry(**e) for e in payload["entries"]],
+    )
 
 
 def _latest_drift() -> dict | None:

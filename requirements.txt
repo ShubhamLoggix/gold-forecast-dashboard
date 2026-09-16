@@ -1,8 +1,12 @@
 # Pinned for reproducibility. Python 3.11-3.14 supported (3.12 recommended).
 timesfm==3.0.2
 torch==2.10.0
-huggingface-hub==1.4.1
-safetensors==0.7.0
+chronos-forecasting==2.3.2
+accelerate==1.15.0
+einops==0.8.2
+huggingface-hub==1.31.0
+safetensors==0.8.0
+transformers==5.17.0
 numpy==2.4.1
 pandas==3.0.0
 pyarrow==23.0.0

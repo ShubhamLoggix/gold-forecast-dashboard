@@ -210,6 +210,27 @@ export interface AccountabilityResponse {
 export const fetchAccountability = () =>
   request<AccountabilityResponse>(`/api/v1/accountability`);
 
+export interface BakeoffEntry {
+  horizon_days: number;
+  horizon_label: string;
+  model: string;
+  mape_pct: number;
+  directional_accuracy_pct: number;
+  band_coverage_pct: number;
+  calibrated_band_coverage_pct: number | null;
+  band_scale: number | null;
+  n_folds: number;
+}
+
+export interface BakeoffResponse {
+  generated_at: string;
+  data_range: string[];
+  entries: BakeoffEntry[];
+}
+
+export const fetchBakeoff = () =>
+  request<BakeoffResponse>(`/api/v1/backtest/bakeoff`);
+
 export const fetchHealth = () => request<HealthResponse>(`/api/v1/health`);
 
 export type IndiaSource = "bullion" | "retail";

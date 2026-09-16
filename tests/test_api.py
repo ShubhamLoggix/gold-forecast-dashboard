@@ -211,6 +211,41 @@ def test_forecast_band_calibration_applied(client, tmp_path):
     assert resp2.json()["band_calibration"] is None
 
 
+def test_backtest_bakeoff_endpoint(client, tmp_path):
+    resp = client.get("/api/v1/backtest/bakeoff")
+    assert resp.status_code == 404
+
+    backtests = tmp_path / "backtests"
+    backtests.mkdir(parents=True)
+    (backtests / "bakeoff_2026-01-01.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-01-01T00:00:00Z",
+                "data_range": ["2021-09-15", "2026-09-14"],
+                "entries": [
+                    {
+                        "horizon_days": 21,
+                        "horizon_label": "1m",
+                        "model": "chronos-t5-tiny",
+                        "mape_pct": 2.91,
+                        "directional_accuracy_pct": 37.7,
+                        "band_coverage_pct": 63.7,
+                        "calibrated_band_coverage_pct": 80.0,
+                        "band_scale": 1.2,
+                        "n_folds": 52,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resp = client.get("/api/v1/backtest/bakeoff")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["entries"][0]["model"] == "chronos-t5-tiny"
+    assert body["data_range"] == ["2021-09-15", "2026-09-14"]
+
+
 def test_refresh_requires_api_key(client):
     assert client.post("/api/v1/refresh").status_code == 401
     assert client.post("/api/v1/refresh", headers={"X-API-Key": "wrong"}).status_code == 401

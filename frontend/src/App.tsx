@@ -16,6 +16,7 @@ import {
   fetchBacktest,
   fetchAccountability,
   fetchBacktestScoreboard,
+  fetchBakeoff,
   fetchForecast,
   fetchHealth,
   fetchHistory,
@@ -25,6 +26,7 @@ import {
   type BacktestResponse,
   type AccountabilityResponse,
   type BacktestScoreboard,
+  type BakeoffResponse,
   type Currency,
   type ForecastResponse,
   type Granularity,
@@ -206,6 +208,7 @@ export default function App() {
   const [indiaLoading, setIndiaLoading] = useState(false);
   const [scoreboard, setScoreboard] = useState<BacktestScoreboard | null>(null);
   const [accountability, setAccountability] = useState<AccountabilityResponse | null>(null);
+  const [bakeoff, setBakeoff] = useState<BakeoffResponse | null>(null);
 
   const [history, setHistory] = useState<HistoryResponse | null>(null);
   const [forecast, setForecast] = useState<ForecastResponse | null>(null);
@@ -304,6 +307,9 @@ export default function App() {
     fetchAccountability()
       .then(setAccountability)
       .catch(() => setAccountability(null));
+    fetchBakeoff()
+      .then(setBakeoff)
+      .catch(() => setBakeoff(null));
   }, []);
 
   const rows = useMemo(
@@ -791,7 +797,81 @@ export default function App() {
                     {forecast.rate.usd_inr_rate_date}
                     {forecast.rate.rate_may_be_stale && (
                       <strong> (rate may be stale — last available FX date used)</strong>
-                    )}
+              )}
+              {bakeoff && bakeoff.entries.length > 0 && (() => {
+                const labels = ["1w", "1m", "3m", "6m", "1y"] as const;
+                const modelOrder = [
+                  "chronos-t5-tiny",
+                  "timesfm-2.5",
+                  "naive-last-value",
+                  "sma-20",
+                ];
+                const cell = (label: string, model: string) =>
+                  bakeoff.entries.find(
+                    (e) => e.horizon_label === label && e.model === model
+                  );
+                const modelsShown = modelOrder.filter((m) =>
+                  bakeoff.entries.some((e) => e.model === m)
+                );
+                return (
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #eceef0" }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                      Model bake-off — average error (MAPE %), identical
+                      out-of-sample folds for every model
+                    </div>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 6 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", color: "#6b7280" }}>
+                          <th style={{ padding: "4px 8px" }}>Model</th>
+                          {labels.map((l) => (
+                            <th key={l} style={{ padding: "4px 8px" }}>{l}</th>
+                          ))}
+                          <th style={{ padding: "4px 8px" }}>Dir. acc. ({horizon})</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {modelsShown.map((m) => (
+                          <tr key={m} style={{ borderTop: "1px solid #eceef0" }}>
+                            <td style={{ padding: "4px 8px", fontWeight: 700 }}>{m}</td>
+                            {labels.map((l) => {
+                              const e = cell(l, m);
+                              const isWinner =
+                                e != null &&
+                                e.mape_pct ===
+                                  Math.min(
+                                    ...modelsShown
+                                      .map((mm) => cell(l, mm)?.mape_pct)
+                                      .filter((v): v is number => v != null)
+                                  );
+                              return (
+                                <td
+                                  key={l}
+                                  style={{
+                                    padding: "4px 8px",
+                                    fontWeight: isWinner ? 700 : 400,
+                                    color: isWinner ? "#166534" : undefined,
+                                  }}
+                                >
+                                  {e != null ? `${e.mape_pct.toFixed(2)}%` : "—"}
+                                </td>
+                              );
+                            })}
+                            <td style={{ padding: "4px 8px" }}>
+                              {cell(horizon, m)?.directional_accuracy_pct.toFixed(1) ?? "—"}
+                              %
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="chart-caption" style={{ marginTop: 6 }}>
+                      Bold = lowest error at that horizon. Same folds for every
+                      model — if a model can't beat the naive row, it is not
+                      adding value on that horizon.
+                    </div>
+                  </div>
+                );
+              })()}
                     .
                   </>
                 )}
