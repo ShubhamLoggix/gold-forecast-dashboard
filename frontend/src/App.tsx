@@ -46,6 +46,7 @@ import {
   UNITS_BY_METAL,
   sanitizeQualityParams,
 } from "./metalUnits";
+import PremiumPanel from "./PremiumPanel";
 const GRANULARITIES: Granularity[] = ["day", "week", "month"];
 const RANGES: { label: string; days: number | null }[] = [
   { label: "1M", days: 21 },
@@ -835,6 +836,9 @@ export default function App() {
               )}
             </div>
           )}
+          {!isSilver && (
+            <PremiumPanel city={city} karat={karat} horizon={horizon} />
+          )}
           {!isRetail && (
           <div className="chart-card">
             <ResponsiveContainer width="100%" height={420}>
@@ -1065,7 +1069,9 @@ export default function App() {
                         <th style={{ padding: "4px 8px" }}>Horizon</th>
                         <th style={{ padding: "4px 8px" }}>Scored</th>
                         <th style={{ padding: "4px 8px" }}>Realized MAPE</th>
-                        <th style={{ padding: "4px 8px" }}>Realized band coverage</th>
+                        <th style={{ padding: "4px 8px" }}>Direction acc.</th>
+                        <th style={{ padding: "4px 8px" }}>Band coverage</th>
+                        <th style={{ padding: "4px 8px" }}>MAPE last 30d</th>
                         <th style={{ padding: "4px 8px" }}>Pending</th>
                       </tr>
                     </thead>
@@ -1080,13 +1086,37 @@ export default function App() {
                             {h.n_scored > 0 ? `${h.mape_pct.toFixed(2)}%` : "—"}
                           </td>
                           <td style={{ padding: "4px 8px" }}>
+                            {h.n_scored > 0 && h.directional_acc_pct > 0
+                              ? `${h.directional_acc_pct.toFixed(0)}%`
+                              : "—"}
+                          </td>
+                          <td style={{ padding: "4px 8px" }}>
                             {h.n_scored > 0 ? `${h.band_coverage_pct.toFixed(1)}%` : "—"}
+                          </td>
+                          <td style={{ padding: "4px 8px" }}>
+                            {h.windows?.["30"]?.n > 0 ? `${h.windows["30"].mape_pct.toFixed(2)}%` : "—"}
                           </td>
                           <td style={{ padding: "4px 8px" }}>{h.n_pending}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                  {Object.keys(accountability.per_series).length > 1 && (
+                    <div style={{ marginTop: 12, paddingTop: 8, borderTop: "1px dashed #d7dbe0", fontSize: 12, color: "#4b5563" }}>
+                      <strong>By series:</strong>{" "}
+                      {Object.entries(accountability.per_series).map(([series, entries]) => {
+                        const scored0 = entries[0];
+                        return (
+                          <span key={series} style={{ marginRight: 14 }}>
+                            {series.replace("premium:", "premium ")}:{" "}
+                            {scored0 && scored0.n_scored > 0
+                              ? `${scored0.mape_pct.toFixed(1)}% MAPE · ${scored0.directional_acc_pct.toFixed(0)}% dir`
+                              : "no scored forecasts yet"}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                   {accountability.recent.length > 0 && (
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 }}>
                       <thead>
@@ -1097,6 +1127,7 @@ export default function App() {
                           <th style={{ padding: "4px 8px" }}>Actual</th>
                           <th style={{ padding: "4px 8px" }}>Error</th>
                           <th style={{ padding: "4px 8px" }}>In band?</th>
+                          <th style={{ padding: "4px 8px" }}>Direction</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1110,11 +1141,19 @@ export default function App() {
                             <td style={{ padding: "4px 8px", color: p.in_band ? "#166534" : "#b91c1c" }}>
                               {p.in_band ? "yes" : "no"}
                             </td>
+                            <td style={{ padding: "4px 8px", color: p.direction_correct ? "#166534" : "#b91c1c" }}>
+                              {p.direction_correct == null ? "—" : p.direction_correct ? "right" : "wrong"}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   )}
+                  <div className="chart-caption" style={{ marginTop: 6 }}>
+                    Direction = did the forecast predict the same up/down move as
+                    reality (vs the day the forecast was made). "In band" = did the
+                    actual land inside the model's own p10–p90 range.
+                  </div>
                 </div>
               )}
             </div>

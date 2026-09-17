@@ -48,6 +48,9 @@ from api.schemas import (
     IndiaRatePoint,
     IndiaRatesResponse,
     OhlcPoint,
+    PremiumForecastResponse,
+    PremiumHistoryPoint,
+    PremiumQualityCounts,
     RateInfo,
     RefreshResponse,
 )
@@ -590,6 +593,115 @@ def get_india_forecast(
     return cached
 
 
+@app.get("/api/v1/premium/forecast", response_model=PremiumForecastResponse, tags=["premium"])
+def get_premium_forecast(
+    city: str = Query(default=settings.digest_city, pattern="^[a-z0-9-]{1,80}$"),
+    karat: str = Query(default="22k", pattern="^(24k|22k|18k)$"),
+    horizon: str = Query(default="1m", pattern="^(1w|1m|3m|6m|1y)$"),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """Retail–COMEX premium forecast: the local, structural series.
+
+    premium(t) = groww_retail(t) − bullion_INR(t). TimesFM is pointed directly
+    at the premium series (per ₹/g, same zero-shot pipeline as price). Rows
+    derived from `comex_converted` backfill are tagged `estimated` and are
+    context only — the accuracy tracker scores the forecast only against real
+    out-of-sample retail that arrives after logging started.
+    """
+    _rate_limit_public(request, "premium_forecast")
+    key = ("premium_forecast", city, karat, horizon, settings.model_version)
+    cached = deps.cache_get(key)
+    if cached is None:
+        cached = _premium_forecast_response(city, karat, horizon)
+        deps.cache_set(key, cached)
+    return cached
+
+
+def _premium_forecast_response(city: str, karat: str, horizon: str) -> PremiumForecastResponse:
+    from ingestion.premium_series import (
+        build_premium_series,
+        load_premium_series,
+        premium_forecast_input,
+        series_id,
+    )
+
+    try:
+        premium_df = build_premium_series(city, karat)
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"premium series unavailable: {exc}"
+        ) from exc
+    premium_input = premium_forecast_input(city, karat)
+    horizon_days = HORIZON_PRESETS[horizon]
+    try:
+        result = deps.get_service().forecast(premium_input, horizon_days, quantiles=True)
+    except Exception as exc:  # noqa: BLE001 - surface as 502
+        raise HTTPException(status_code=502, detail=f"premium forecast failed: {exc}") from exc
+
+    quality_counts = {
+        "real": int((premium_df["quality"] == "real").sum()),
+        "estimated": int((premium_df["quality"] == "estimated").sum()),
+    }
+    last_row = premium_df.iloc[-1]
+    history = [
+        PremiumHistoryPoint(
+            date=pd.Timestamp(row["date"]).date(),
+            retail_pg=float(row["retail_pg"]),
+            bullion_pg=float(row["bullion_pg"]),
+            premium_pg=float(row["premium_pg"]),
+            quality=str(row["quality"]),
+        )
+        for _, row in premium_df.tail(180).iterrows()
+    ]
+
+    # "Best time to buy": premium forecast trending below today's premium.
+    mean_point = float(result.point.mean())
+    best_buy = bool(mean_point < float(last_row["premium_pg"]))
+    pct_drop = (float(last_row["premium_pg"]) - mean_point) / max(
+        float(last_row["premium_pg"]), 1e-9
+    ) * 100
+    if best_buy:
+        reason = (
+            f"The retail premium is forecast to fall by about {pct_drop:.0f}% over "
+            f"the next {horizon} — buying gold now may mean paying the current higher "
+            f"premium on top of whatever the price does."
+        )
+    else:
+        reason = (
+            f"The retail premium is NOT forecast to fall over the next {horizon}; "
+            f"the {'estimated' if last_row['quality'] == 'estimated' else 'real'} premium "
+            f"is expected to hold near ₹{mean_point:,.0f}/g."
+        )
+
+    if premium_input.empty:
+        raise HTTPException(status_code=502, detail="No premium series available for forecasting")
+
+    return PremiumForecastResponse(
+        city=city,
+        karat=karat,  # type: ignore[arg-type]
+        series_id=series_id(city, karat),
+        generated_at=dt.datetime.now(dt.timezone.utc),
+        horizon=horizon,  # type: ignore[arg-type]
+        horizon_days=horizon_days,
+        model_version=result.model_version,
+        latency_ms=result.latency_ms,
+        last_date=pd.Timestamp(last_row["date"]).date(),
+        last_retail_pg=float(last_row["retail_pg"]),
+        last_bullion_pg=float(last_row["bullion_pg"]),
+        last_premium_pg=float(last_row["premium_pg"]),
+        last_quality=str(last_row["quality"]),
+        quality_counts=PremiumQualityCounts(**quality_counts),
+        dates=[d for d in result.dates],
+        point=[float(v) for v in result.point],
+        q10=[float(v) for v in result.q10],
+        q50=[float(v) for v in result.q50],
+        q90=[float(v) for v in result.q90],
+        history=history,
+        best_time_to_buy=best_buy,
+        best_time_to_buy_reason=reason,
+    )
+
+
 @app.get("/api/v1/backtest/latest", response_model=BacktestResponse, tags=["backtest"])
 def get_latest_backtest(request: Request = None):  # type: ignore[assignment]
     _rate_limit_public(request, "backtest")
@@ -754,8 +866,13 @@ def get_accountability(request: Request = None):  # type: ignore[assignment]
         per_horizon=[
             AccountabilityHorizon(**e) for e in payload["per_horizon"]
         ],
+        per_series={
+            s: [AccountabilityHorizon(**e) for e in entries]
+            for s, entries in payload.get("per_series", {}).items()
+        },
         pending_counts={str(k): v for k, v in payload["pending_counts"].items()},
         recent=[AccountabilityPoint(**p) for p in payload["recent"]],
+        generated_at=payload.get("generated_at"),
     )
 
 

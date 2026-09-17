@@ -277,30 +277,81 @@ class AlertDeletedResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 # Forecast accountability
 # --------------------------------------------------------------------------- #
+class RollingWindowStat(BaseModel):
+    mae: float
+    mape_pct: float
+    n: int
+
+
 class AccountabilityPoint(BaseModel):
     origin_date: dt.date
     horizon_days: int
     target_date: dt.date
+    series: str = "gold_comex"
     predicted: float
     actual: float
     err_pct: float
     in_band: bool
+    direction_correct: bool | None = None
 
 
 class AccountabilityHorizon(BaseModel):
     horizon_days: int
     n_scored: int
     mape_pct: float
+    mae: float = 0.0
+    directional_acc_pct: float = 0.0
     band_coverage_pct: float
     n_pending: int
+    windows: dict[str, RollingWindowStat] = Field(default_factory=dict)
 
 
 class AccountabilityResponse(BaseModel):
     per_horizon: list[AccountabilityHorizon]
+    per_series: dict[str, list[AccountabilityHorizon]] = Field(default_factory=dict)
     pending_counts: dict[str, int]
     recent: list[AccountabilityPoint]
+    generated_at: dt.datetime | None = None
     disclaimer: str = (
         "Realized track record of forecasts this system actually logged — "
         "scored automatically as actual closes become known. Empty until the "
         "first logged forecast matures."
     )
+
+
+class PremiumHistoryPoint(BaseModel):
+    date: dt.date
+    retail_pg: float
+    bullion_pg: float
+    premium_pg: float
+    quality: str
+
+
+class PremiumQualityCounts(BaseModel):
+    real: int
+    estimated: int
+
+
+class PremiumForecastResponse(BaseModel):
+    city: str
+    karat: Karat
+    series_id: str
+    generated_at: dt.datetime
+    horizon: HorizonPreset
+    horizon_days: int
+    model_version: str
+    latency_ms: float
+    last_date: dt.date
+    last_retail_pg: float
+    last_bullion_pg: float
+    last_premium_pg: float
+    last_quality: str
+    quality_counts: PremiumQualityCounts
+    dates: list[dt.date]
+    point: list[float]
+    q10: list[float]
+    q50: list[float]
+    q90: list[float]
+    history: list[PremiumHistoryPoint]
+    best_time_to_buy: bool
+    best_time_to_buy_reason: str

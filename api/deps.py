@@ -122,8 +122,20 @@ def _bootstrap() -> None:
         try:
             from forecasting.accountability import log_daily_forecasts
             from ingestion.fetch_gold_prices import load_canonical
+            from ingestion.premium_series import build_premium_series, premium_forecast_input
 
             log_daily_forecasts(get_service(), load_canonical())
+            try:
+                build_premium_series(settings.digest_city)
+                premium_input = premium_forecast_input(settings.digest_city)
+                if not premium_input.empty and len(premium_input) >= 32:
+                    log_daily_forecasts(
+                        get_service(),
+                        premium_input,
+                        series=f"premium:{settings.digest_city}:22k",
+                    )
+            except Exception as prem_exc:  # noqa: BLE001 - premium is auxiliary
+                logger.warning("premium accountability logging failed: %s", prem_exc)
         except Exception as acc_exc:  # noqa: BLE001 - accountability is auxiliary
             logger.warning("accountability logging failed: %s", acc_exc)
         get_service()

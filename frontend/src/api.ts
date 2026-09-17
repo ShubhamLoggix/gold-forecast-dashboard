@@ -199,24 +199,37 @@ export interface AccountabilityPoint {
   origin_date: string;
   horizon_days: number;
   target_date: string;
+  series: string;
   predicted: number;
   actual: number;
   err_pct: number;
   in_band: boolean;
+  direction_correct: boolean | null;
+}
+
+export interface RollingWindowStat {
+  mae: number;
+  mape_pct: number;
+  n: number;
 }
 
 export interface AccountabilityHorizon {
   horizon_days: number;
   n_scored: number;
   mape_pct: number;
+  mae: number;
+  directional_acc_pct: number;
   band_coverage_pct: number;
   n_pending: number;
+  windows: Record<string, RollingWindowStat>;
 }
 
 export interface AccountabilityResponse {
   per_horizon: AccountabilityHorizon[];
+  per_series: Record<string, AccountabilityHorizon[]>;
   pending_counts: Record<string, number>;
   recent: AccountabilityPoint[];
+  generated_at: string | null;
   disclaimer: string;
 }
 
@@ -308,4 +321,52 @@ export const fetchIndiaForecast = (
   request<IndiaForecastResponse>(
     `/api/v1/india/forecast?city=${encodeURIComponent(city)}` +
       `&horizon=${horizon}&karat=${karat}&unit=${unit}`,
+  );
+
+export interface PremiumHistoryPoint {
+  date: string;
+  retail_pg: number;
+  bullion_pg: number;
+  premium_pg: number;
+  quality: string;
+}
+
+export interface PremiumQualityCounts {
+  real: number;
+  estimated: number;
+}
+
+export interface PremiumForecastResponse {
+  city: string;
+  karat: Karat;
+  series_id: string;
+  generated_at: string;
+  horizon: Horizon;
+  horizon_days: number;
+  model_version: string;
+  latency_ms: number;
+  last_date: string;
+  last_retail_pg: number;
+  last_bullion_pg: number;
+  last_premium_pg: number;
+  last_quality: string;
+  quality_counts: PremiumQualityCounts;
+  dates: string[];
+  point: number[];
+  q10: number[];
+  q50: number[];
+  q90: number[];
+  history: PremiumHistoryPoint[];
+  best_time_to_buy: boolean;
+  best_time_to_buy_reason: string;
+}
+
+export const fetchPremiumForecast = (
+  city: string,
+  karat: Karat,
+  horizon: Horizon,
+) =>
+  request<PremiumForecastResponse>(
+    `/api/v1/premium/forecast?city=${encodeURIComponent(city)}` +
+      `&karat=${karat}&horizon=${horizon}`,
   );

@@ -74,6 +74,18 @@ def _refresh_india_rates_job() -> None:
         logger.warning("India retail rate refresh FAILED:\n%s", traceback.format_exc())
 
 
+def _refresh_premium_series_job(city: str = "pune") -> None:
+    """Recompute the retail–COMEX premium series for the digest city (gold)."""
+    try:
+        from ingestion.premium_series import build_premium_series
+
+        for karat in ("24k", "22k", "18k"):
+            frame = build_premium_series(city=city, karat=karat)
+            logger.info("premium series %s:%s rebuilt (%d rows).", city, karat, len(frame))
+    except Exception:  # noqa: BLE001 - premium is auxiliary
+        logger.warning("premium series refresh FAILED:\n%s", traceback.format_exc())
+
+
 def daily_refresh_job() -> None:
     logger.info("Scheduled data refresh starting...")
     try:
@@ -108,6 +120,7 @@ def daily_refresh_job() -> None:
         deps.last_refresh_ok = False
         logger.error("Scheduled data refresh FAILED:\n%s", traceback.format_exc())
     _refresh_india_rates_job()
+    _refresh_premium_series_job(settings.digest_city)
     _accountability_and_alerts_job()
 
 
@@ -116,9 +129,20 @@ def _accountability_and_alerts_job() -> None:
         import api.deps as deps
         from forecasting.accountability import log_daily_forecasts
         from ingestion.fetch_gold_prices import load_canonical
+        from ingestion.premium_series import premium_forecast_input
 
         history = load_canonical()
         log_daily_forecasts(deps.get_service(), history)
+        try:
+            premium_input = premium_forecast_input(settings.digest_city)
+            if not premium_input.empty and len(premium_input) >= 32:
+                log_daily_forecasts(
+                    deps.get_service(),
+                    premium_input,
+                    series=f"premium:{settings.digest_city}:22k",
+                )
+        except Exception as premium_exc:  # noqa: BLE001 - premium is auxiliary
+            logger.warning("premium accountability logging FAILED:\n%s", premium_exc)
     except Exception:  # noqa: BLE001
         logger.warning("accountability logging FAILED:\n%s", traceback.format_exc())
     _send_digest_and_check_alerts()
