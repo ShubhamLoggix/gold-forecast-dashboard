@@ -432,6 +432,21 @@ export default function App() {
     return buildRows(histLike, indiaForecast as unknown as ForecastResponse);
   }, [india, indiaForecast, karat, unit]);
 
+  const accuracyRows =
+    accountability?.per_horizon.map((h) => {
+      const w = (key: string) =>
+        h.windows?.[key] && h.windows[key].n > 0 ? h.windows[key].mae : null;
+      return {
+        horizon: HORIZON_LABEL[h.horizon_days] ?? `${h.horizon_days}d`,
+        w7: w("7"),
+        w30: w("30"),
+        w90: w("90"),
+      };
+    }) ?? [];
+  const hasAccuracyData = accuracyRows.some(
+    (r) => r.w7 != null || r.w30 != null || r.w90 != null,
+  );
+
   return (
     <div className="container">
       <h1>Gold Price Forecast — TimesFM</h1>
@@ -1156,6 +1171,124 @@ export default function App() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {accountability && (
+            <div className="chart-card">
+              <h3 style={{ marginTop: 0, fontSize: 16 }}>
+                Model Accuracy — rolling error on forecasts actually logged
+              </h3>
+              {hasAccuracyData ? (
+                <>
+                  <ResponsiveContainer width="100%" height={260}>
+                    <ComposedChart
+                      data={accuracyRows}
+                      margin={{ top: 10, right: 10, bottom: 0, left: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#eceef0" />
+                      <XAxis dataKey="horizon" tick={{ fontSize: 11 }} />
+                      <YAxis
+                        tick={{ fontSize: 11 }}
+                        width={70}
+                        tickFormatter={(v: number) => formatValue(v)}
+                      />
+                      <Tooltip
+                        formatter={(value: number | string) =>
+                          typeof value === "number" ? formatValue(value) : value
+                        }
+                      />
+                      <Legend />
+                      <Line
+                        dataKey="w7"
+                        name="Last 7 days"
+                        stroke="#d4a404"
+                        strokeWidth={2}
+                        dot
+                        connectNulls
+                      />
+                      <Line
+                        dataKey="w30"
+                        name="Last 30 days"
+                        stroke="#1266a2"
+                        strokeWidth={2}
+                        dot
+                        connectNulls
+                      />
+                      <Line
+                        dataKey="w90"
+                        name="Last 90 days"
+                        stroke="#bb5588"
+                        strokeWidth={2}
+                        dot
+                        connectNulls
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                  <div className="chart-caption" style={{ marginTop: 6 }}>
+                    Rolling MAE — average absolute error in price units, per horizon,
+                    computed only from forecasts whose target date has passed. A window
+                    with few points is noisy.
+                  </div>
+                </>
+              ) : (
+                <div className="chart-caption" style={{ marginTop: 6 }}>
+                  No matured forecasts yet — rolling error appears here as logged
+                  forecasts reach their target dates.
+                </div>
+              )}
+
+              <div style={{ fontWeight: 700, fontSize: 14, marginTop: 14 }}>
+                Last 7 forecasts actually scored
+              </div>
+              {accountability.recent.length > 0 ? (
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 13,
+                    marginTop: 6,
+                  }}
+                >
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "#6b7280" }}>
+                      <th style={{ padding: "4px 8px" }}>Made on</th>
+                      <th style={{ padding: "4px 8px" }}>Predicted</th>
+                      <th style={{ padding: "4px 8px" }}>Actual</th>
+                      <th style={{ padding: "4px 8px" }}>Hit / miss</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {accountability.recent.slice(0, 7).map((p, i) => {
+                      const hit = p.within_q10_q90 ?? p.in_band;
+                      return (
+                        <tr key={i} style={{ borderTop: "1px solid #f3f4f6" }}>
+                          <td style={{ padding: "4px 8px" }}>{p.origin_date}</td>
+                          <td style={{ padding: "4px 8px" }}>{formatValue(p.predicted)}</td>
+                          <td style={{ padding: "4px 8px" }}>{formatValue(p.actual)}</td>
+                          <td
+                            style={{
+                              padding: "4px 8px",
+                              color: hit ? "#166534" : "#b91c1c",
+                            }}
+                          >
+                            {hit ? "hit (in p10–p90)" : "miss"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="chart-caption" style={{ marginTop: 6 }}>
+                  No scored forecasts yet.
+                </div>
+              )}
+              <div className="chart-caption" style={{ marginTop: 6 }}>
+                "Hit" = the actual landed inside the model's own p10–p90 band. These
+                are gold-COMEX forecasts; scores update as each logged forecast
+                matures — this measures the model on promises it actually made.
+              </div>
             </div>
           )}
 

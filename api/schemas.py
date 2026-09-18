@@ -280,6 +280,7 @@ class AlertDeletedResponse(BaseModel):
 class RollingWindowStat(BaseModel):
     mae: float
     mape_pct: float
+    coverage_pct: float = 0.0
     n: int
 
 
@@ -292,6 +293,7 @@ class AccountabilityPoint(BaseModel):
     actual: float
     err_pct: float
     in_band: bool
+    within_q10_q90: bool | None = None
     direction_correct: bool | None = None
 
 
@@ -302,6 +304,7 @@ class AccountabilityHorizon(BaseModel):
     mae: float = 0.0
     directional_acc_pct: float = 0.0
     band_coverage_pct: float
+    coverage_pct: float = 0.0
     n_pending: int
     windows: dict[str, RollingWindowStat] = Field(default_factory=dict)
 

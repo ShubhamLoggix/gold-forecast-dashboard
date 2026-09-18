@@ -155,7 +155,8 @@ def score_forecasts(gold_history: pd.DataFrame, data_dir: Path | None = None) ->
       {
         "per_series": {series: [AccountabilityHorizon-like dicts with
             horizon_days, n_scored, mape_pct, mae, directional_acc_pct,
-            band_coverage_pct, n_pending, windows]},
+            band_coverage_pct, coverage_pct, n_pending, windows (each window
+            has mae, mape_pct, coverage_pct, n)]},
         "per_horizon": same list for the default (gold) series, kept for
             backward-compatible callers,
         "pending_counts": {series.horizon: n},
@@ -183,8 +184,17 @@ def score_forecasts(gold_history: pd.DataFrame, data_dir: Path | None = None) ->
                     "mae": 0.0,
                     "directional_acc_pct": 0.0,
                     "band_coverage_pct": 0.0,
+                    "coverage_pct": 0.0,
                     "n_pending": int(len(g)),
-                    "windows": {str(w): {"mae": 0.0, "mape_pct": 0.0, "n": 0} for w in ROLLING_WINDOWS},
+                    "windows": {
+                        str(w): {
+                            "mae": 0.0,
+                            "mape_pct": 0.0,
+                            "coverage_pct": 0.0,
+                            "n": 0,
+                        }
+                        for w in ROLLING_WINDOWS
+                    },
                 }
                 for days, g in group.groupby("horizon_days")
             ]
@@ -207,6 +217,10 @@ def score_forecasts(gold_history: pd.DataFrame, data_dir: Path | None = None) ->
         merged["in_band"] = (merged["actual"] >= merged["q10"]) & (
             merged["actual"] <= merged["q90"]
         )
+        # Explicit per-point band hit, nullable until the actual is known —
+        # mirrors direction_correct. Same value as in_band once scored.
+        merged["within_q10_q90"] = merged["in_band"].astype("object")
+        merged.loc[~merged["scored"], "within_q10_q90"] = None
         merged["direction_correct"] = (
             (merged["point"] - merged["origin_close"]) > 0
         ) == ((merged["actual"] - merged["origin_close"]) > 0)
@@ -228,6 +242,9 @@ def score_forecasts(gold_history: pd.DataFrame, data_dir: Path | None = None) ->
                 windows[str(win)] = {
                     "mae": float(wg["err_abs"].mean()) if len(wg) else 0.0,
                     "mape_pct": float(wg["err_pct"].mean()) if len(wg) else 0.0,
+                    "coverage_pct": (
+                        float(wg["in_band"].mean() * 100) if len(wg) else 0.0
+                    ),
                     "n": int(len(wg)),
                 }
             stats_by_horizon.append(
@@ -238,6 +255,9 @@ def score_forecasts(gold_history: pd.DataFrame, data_dir: Path | None = None) ->
                     "mae": float(s["err_abs"].mean()) if len(s) else 0.0,
                     "directional_acc_pct": float(dir_acc) if dir_acc is not None else 0.0,
                     "band_coverage_pct": (
+                        float(s["in_band"].mean() * 100) if len(s) else 0.0
+                    ),
+                    "coverage_pct": (
                         float(s["in_band"].mean() * 100) if len(s) else 0.0
                     ),
                     "n_pending": int((~hg["scored"]).sum()),
@@ -276,6 +296,11 @@ def score_forecasts(gold_history: pd.DataFrame, data_dir: Path | None = None) ->
                 "actual": float(r["actual"]),
                 "err_pct": float(r["err_pct"]),
                 "in_band": bool(r["in_band"]),
+                "within_q10_q90": (
+                    bool(r["within_q10_q90"])
+                    if pd.notna(r["within_q10_q90"])
+                    else None
+                ),
                 "direction_correct": (
                     bool(r["direction_correct"])
                     if pd.notna(r["direction_correct"])

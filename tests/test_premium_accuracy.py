@@ -158,11 +158,13 @@ def test_score_forecasts_premium_series_direction_and_windows(isolated_settings,
         "mae",
         "directional_acc_pct",
         "band_coverage_pct",
+        "coverage_pct",
         "windows",
     ):
         assert field in entry
     assert set(entry["windows"].keys()) == {"7", "30", "90"}
     assert isinstance(entry["windows"]["30"]["mape_pct"], float)
+    assert isinstance(entry["windows"]["30"]["coverage_pct"], float)
 
 
 def test_score_forecasts_new_fields_on_gold(isolated_settings):
@@ -193,7 +195,14 @@ def test_score_forecasts_new_fields_on_gold(isolated_settings):
     assert 0 <= h5["directional_acc_pct"] <= 100
     assert isinstance(h5["mae"], float)
     assert "7" in h5["windows"]
+    # Rolling + overall band coverage are exposed identically (0-100 float).
+    assert isinstance(h5["coverage_pct"], float)
+    assert h5["coverage_pct"] == h5["band_coverage_pct"]
+    assert isinstance(h5["windows"]["7"]["coverage_pct"], float)
     assert all(p["series"] == "gold_comex" for p in report["recent"])
+    # Per-point band hit mirrors in_band once the actual is known.
+    for p in report["recent"]:
+        assert p["within_q10_q90"] == p["in_band"]
     assert report["generated_at"]
 
 

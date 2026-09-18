@@ -204,12 +204,14 @@ export interface AccountabilityPoint {
   actual: number;
   err_pct: number;
   in_band: boolean;
+  within_q10_q90: boolean | null;
   direction_correct: boolean | null;
 }
 
 export interface RollingWindowStat {
   mae: number;
   mape_pct: number;
+  coverage_pct: number;
   n: number;
 }
 
@@ -220,6 +222,7 @@ export interface AccountabilityHorizon {
   mae: number;
   directional_acc_pct: number;
   band_coverage_pct: number;
+  coverage_pct: number;
   n_pending: number;
   windows: Record<string, RollingWindowStat>;
 }
