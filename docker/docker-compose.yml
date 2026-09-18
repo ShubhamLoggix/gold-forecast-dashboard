@@ -1,3 +1,5 @@
+name: gold
+
 services:
   backend:
     build:
@@ -47,3 +49,8 @@ services:
 
 volumes:
   gold-data:
+    # Pre-existing data volume (model weights + cached data), created under the
+    # old `docker` project. Marked external so compose uses it as-is and never
+    # tries to create/replace it when the project name changes.
+    external: true
+    name: docker_gold-data
