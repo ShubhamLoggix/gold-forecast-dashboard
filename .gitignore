@@ -24,3 +24,5 @@ data/models/**/*.bin
 data/models/**/optimizer*
 data/models/**/scheduler*
 data/models/**/checkpoint-*/
+.gstack/
+.tmp/
