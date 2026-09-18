@@ -167,6 +167,52 @@ def test_score_forecasts_premium_series_direction_and_windows(isolated_settings,
     assert isinstance(entry["windows"]["30"]["coverage_pct"], float)
 
 
+def test_premium_forecasts_are_actually_scored(isolated_settings):
+    """Regression: premium must resolve its OWN actuals file.
+
+    A layout bug mapped "premium:pune:22k" to premium_premium_22k.parquet, so
+    premium scoring silently returned n_scored=0 forever. A matured target
+    inside the actual premium window must score after the fix.
+    """
+    from forecasting.accountability import score_forecasts
+    from ingestion.premium_series import build_premium_series, premium_actuals
+
+    _seed_premium_inputs(isolated_settings.data_dir)
+    build_premium_series("pune", "22k", data_dir=isolated_settings.data_dir)
+    actuals = premium_actuals("pune", "22k", data_dir=isolated_settings.data_dir)
+
+    origin = actuals["target_date"].min()
+    target = actuals["target_date"].max()
+    actual_value = float(
+        actuals.loc[actuals["target_date"] == target, "actual"].iloc[0]
+    )
+
+    now = dt.datetime.now(dt.timezone.utc)
+    log = pd.DataFrame(
+        {
+            "made_at_utc": [now],
+            "origin_date": [origin],
+            "horizon_days": [5],
+            "target_date": [target],
+            "series": ["premium:pune:22k"],
+            "point": [actual_value],
+            "q10": [actual_value - 50.0],
+            "q90": [actual_value + 50.0],
+            "model_version": ["2.5"],
+        }
+    )
+    out = isolated_settings.data_dir / "forecasts"
+    out.mkdir(parents=True, exist_ok=True)
+    log.to_parquet(out / "forecast_log.parquet", index=False)
+
+    report = score_forecasts(make_history(n=100), data_dir=isolated_settings.data_dir)
+    entry = next(
+        e for e in report["per_series"]["premium:pune:22k"] if e["horizon_days"] == 5
+    )
+    assert entry["n_scored"] == 1
+    assert entry["coverage_pct"] == 100.0
+
+
 def test_score_forecasts_new_fields_on_gold(isolated_settings):
     from forecasting.accountability import score_forecasts
 

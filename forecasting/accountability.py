@@ -130,7 +130,7 @@ def _actuals_for_series(series_name: str, gold_history: pd.DataFrame) -> pd.Data
             }
         )
     elif series_name.startswith("premium:"):
-        _city, _, _karat = series_name.split(":")
+        _, _city, _karat = series_name.split(":")
         from ingestion.premium_series import premium_actuals
 
         actual = premium_actuals(_city, _karat)
